@@ -17,7 +17,7 @@ const ConnectedAccountSchema = new Schema(
     // Platform name
     platform: {
       type: String,
-      enum: ["facebook", "instagram", "tiktok"],
+      enum: ["facebook", "instagram", "tiktok", "youtube"],
       required: true,
       index: true,
     },

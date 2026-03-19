@@ -12,6 +12,17 @@ import { sendSuccess } from "../../utils/response";
 dotenv.config();
 
 
+
+
+
+
+
+/* ===============================
+   META (Facebook + Instagram)
+================================ */
+
+
+
 /**
  * Starts the Meta OAuth flow.
  * - Generates a secure state value.
@@ -61,7 +72,7 @@ export const metaStartUrl = async (
     response_type: "code",
   });
 
-  const url = `https://www.facebook.com/v24.0/dialog/oauth?${params.toString()}`;
+  const url = `https://www.facebook.com/v25.0/dialog/oauth?${params.toString()}`;
 
   // Send the OAuth URL to frontend
   return sendSuccess(req, res, { url }, 200);
@@ -98,7 +109,7 @@ export const metaCallback = async (req: Request, res: Response, next: NextFuncti
     if (session.expiresAt < new Date()) return next(new AppError("State expired", 400));
 
     // 1) Exchange code -> short-lived user token
-    const tokenResp = await axios.get("https://graph.facebook.com/v24.0/oauth/access_token", {
+    const tokenResp = await axios.get("https://graph.facebook.com/v25.0/oauth/access_token", {
       params: { client_id: META_APP_ID, client_secret: META_APP_SECRET, redirect_uri: META_REDIRECT_URI, code },
       timeout: 30_000,
       validateStatus: (s) => s >= 200 && s < 300,
@@ -108,7 +119,7 @@ export const metaCallback = async (req: Request, res: Response, next: NextFuncti
     if (!shortUserAccessToken) return next(new AppError("Failed to get access token", 400));
 
     // 2) Exchange short-lived -> long-lived token (recommended by Meta)
-    const longResp = await axios.get("https://graph.facebook.com/v24.0/oauth/access_token", {
+    const longResp = await axios.get("https://graph.facebook.com/v25.0/oauth/access_token", {
       params: {
         grant_type: "fb_exchange_token",
         client_id: META_APP_ID,
@@ -128,7 +139,7 @@ export const metaCallback = async (req: Request, res: Response, next: NextFuncti
     await session.save();
 
     // Redirect frontend to continue the connection flow
-    return res.redirect(`${FRONTEND_URL}/dashboard/connect?state=${state}`);
+    return res.redirect(`${FRONTEND_URL}/dashboard/connect?state=${state}&platform=meta`);
   } catch (e: any) {
     // Try to show a readable Meta error (if present)
     const fbMsg = e?.response?.data?.error?.message;
@@ -167,10 +178,11 @@ export const metaPages = async (
   if (!userAccessToken) return next(new AppError("Session token missing", 400));
 
   // Fetch pages the user can manage
-  const pagesResp = await axios.get("https://graph.facebook.com/v24.0/me/accounts", {
+  const pagesResp = await axios.get("https://graph.facebook.com/v25.0/me/accounts", {
     params: { access_token: userAccessToken, fields: "id,name" },
     timeout: 30_000,
   });
+
 
   const pages = pagesResp.data?.data ?? [];
   if (!Array.isArray(pages)) return next(new AppError("Invalid pages response", 400));
@@ -218,11 +230,12 @@ export const metaSelectPage = async (req: AuthenticatedRequest, res: Response, n
     if (!userAccessToken) return next(new AppError("Session token missing", 400));
 
     // 1) Fetch pages including page access tokens
-    const pagesResp = await axios.get("https://graph.facebook.com/v24.0/me/accounts", {
+    const pagesResp = await axios.get("https://graph.facebook.com/v25.0/me/accounts", {
       params: { access_token: userAccessToken, fields: "id,name,access_token" },
       timeout: 30_000,
       validateStatus: (s) => s >= 200 && s < 300,
     });
+
 
     const pages: any[] = pagesResp.data?.data ?? [];
     if (!Array.isArray(pages) || pages.length === 0) {
@@ -316,7 +329,9 @@ export const metaSelectPage = async (req: AuthenticatedRequest, res: Response, n
 
 
 
-
+/* ===============================
+   TIKTOK
+================================ */
 
 
 
@@ -541,7 +556,7 @@ export const setPlatformActive = async (req: AuthenticatedRequest, res: Response
 
 
 
-const PLATFORMS = ["facebook", "instagram", "tiktok"] as const;
+const PLATFORMS = ["facebook", "instagram", "tiktok", "youtube", "telegram"] as const;
 type Platform = (typeof PLATFORMS)[number];
 
 /**
@@ -560,6 +575,8 @@ export const getConnectionsStatus = async (req: AuthenticatedRequest, res: Respo
     facebook: { connected: false, active: false },
     instagram: { connected: false, active: false },
     tiktok: { connected: false, active: false },
+    youtube: { connected: false, active: false },
+    telegram: { connected: false, active: false },
   };
 
   for (const acc of accounts) {
@@ -575,4 +592,335 @@ export const getConnectionsStatus = async (req: AuthenticatedRequest, res: Respo
   }
 
   return sendSuccess(req, res, { connections: result }, 200);
+};
+
+
+
+
+
+
+
+
+
+/* ===============================
+   YOUTUBE
+================================ */
+
+export const youtubeStartUrl = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  const userId = req.user?._id;
+  if (!userId) return next(new AppError("Unauthorized", 401));
+
+  const state = crypto.randomBytes(16).toString("hex");
+
+  await OAuthState.create({
+    state,
+    userId,
+    provider: "youtube",
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    used: false,
+  });
+
+  const { GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI } = process.env;
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_REDIRECT_URI) {
+    return next(new AppError("Google config missing", 500));
+  }
+
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: "code",
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/youtube.upload",
+      "https://www.googleapis.com/auth/youtube.readonly",
+    ].join(" "),
+    state,
+  });
+
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  return sendSuccess(req, res, { url }, 200);
+};
+
+
+
+
+
+export const youtubeCallback = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const code = typeof req.query.code === "string" ? req.query.code : undefined;
+  const state = typeof req.query.state === "string" ? req.query.state : undefined;
+
+  if (!code || !state) return next(new AppError("Missing code/state", 400));
+
+  const {
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI,
+    YOUTUBE_FRONTEND_REDIRECT,
+  } = process.env;
+
+  if (
+    !GOOGLE_CLIENT_ID ||
+    !GOOGLE_CLIENT_SECRET ||
+    !GOOGLE_REDIRECT_URI ||
+    !YOUTUBE_FRONTEND_REDIRECT
+  ) {
+    return next(new AppError("Google config missing", 500));
+  }
+
+  const session = await OAuthState.findOne({ state, provider: "youtube" });
+  if (!session) return next(new AppError("Invalid state", 400));
+  if (session.used) return next(new AppError("State already used", 400));
+  if (session.expiresAt < new Date()) return next(new AppError("State expired", 400));
+
+  const tokenResp = await axios.post(
+    "https://oauth2.googleapis.com/token",
+    new URLSearchParams({
+      code,
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      redirect_uri: GOOGLE_REDIRECT_URI,
+      grant_type: "authorization_code",
+    }).toString(),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 30_000,
+    }
+  );
+
+  const accessToken = tokenResp.data?.access_token;
+  const refreshToken = tokenResp.data?.refresh_token;
+  const expiresIn = tokenResp.data?.expires_in;
+
+  if (!accessToken) {
+    return next(new AppError("Failed to get Google access token", 400));
+  }
+
+  session.used = true;
+  session.meta = {
+    ...(session.meta || {}),
+    accessToken,
+    refreshToken,
+    expiresIn,
+  };
+
+  await session.save();
+
+  return res.redirect(`${YOUTUBE_FRONTEND_REDIRECT}?state=${state}&platform=youtube`);
+
+};
+
+
+export const youtubeChannel = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  const userId = req.user?._id;
+  if (!userId) return next(new AppError("Unauthorized", 401));
+
+  const state = typeof req.query.state === "string" ? req.query.state : undefined;
+  if (!state) {
+    return next(
+      new AppError("Invalid input", 400, [
+        { field: "state", message: "Required" },
+      ])
+    );
+  }
+
+  const session = await OAuthState.findOne({
+    state,
+    provider: "youtube",
+    userId,
+  });
+
+
+  if (!session) return next(new AppError("Invalid state", 400));
+  if (session.expiresAt < new Date()) return next(new AppError("State expired", 400));
+
+  const accessToken = session.meta?.accessToken;
+  const refreshToken = session.meta?.refreshToken;
+  const expiresIn = session.meta?.expiresIn;
+
+  if (!accessToken) {
+    return next(new AppError("Session token missing", 400));
+  }
+
+  const channelResp = await axios.get(
+    "https://www.googleapis.com/youtube/v3/channels",
+    {
+      params: {
+        part: "snippet",
+        mine: true,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      timeout: 30_000,
+    }
+  );
+
+  const channel = channelResp.data?.items?.[0];
+
+  if (!channel?.id) {
+    return next(
+      new AppError(
+        "No YouTube channel found for this Google account. Please create a YouTube channel first.",
+        400
+      )
+    );
+  }
+
+  await ConnectedAccount.findOneAndUpdate(
+    { userId, platform: "youtube" },
+    {
+      userId,
+      platform: "youtube",
+      accountExternalId: channel.id,
+      accountName: channel.snippet?.title || "YouTube",
+      accessToken,
+      tokenExpiresAt: Number.isFinite(Number(expiresIn))
+        ? new Date(Date.now() + Number(expiresIn) * 1000)
+        : undefined,
+      isActive: true,
+      meta: { refreshToken },
+    },
+    { upsert: true, new: true }
+  );
+
+  return sendSuccess(
+    req,
+    res,
+    {
+      connected: true,
+      youtube: {
+        channelId: channel.id,
+        title: channel.snippet?.title || "YouTube",
+      },
+    },
+    200
+  );
+};
+
+
+
+
+
+
+export const connectTelegram = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
+    const userId = req.user?._id;
+    if (!userId) return next(new AppError("Unauthorized", 401));
+
+    const botToken =
+      typeof req.body?.botToken === "string" ? req.body.botToken.trim() : "";
+    const channelUsername =
+      typeof req.body?.channelUsername === "string"
+        ? req.body.channelUsername.trim()
+        : "";
+
+    if (!botToken || !channelUsername) {
+      return next(
+        new AppError("Invalid input", 400, [
+          !botToken ? { field: "botToken", message: "Required" } : null,
+          !channelUsername
+            ? { field: "channelUsername", message: "Required" }
+            : null,
+        ].filter(Boolean) as any)
+      );
+    }
+
+    const normalizedChannel = channelUsername.startsWith("@")
+      ? channelUsername
+      : `@${channelUsername}`;
+
+    const baseUrl = `https://api.telegram.org/bot${botToken}`;
+
+    // 1) Validate bot token
+    const meResp = await axios.get(`${baseUrl}/getMe`, {
+      timeout: 30_000,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
+
+    if (!meResp.data?.ok || !meResp.data?.result) {
+      return next(new AppError("Invalid Telegram bot token", 400));
+    }
+
+    const botInfo = meResp.data.result;
+
+    // 2) Validate channel access
+    let chatResp;
+    try {
+      chatResp = await axios.get(`${baseUrl}/getChat`, {
+        params: { chat_id: normalizedChannel },
+        timeout: 30_000,
+        validateStatus: (s) => s >= 200 && s < 300,
+      });
+    } catch (e: any) {
+      const tgMsg = e?.response?.data?.description;
+      return next(
+        new AppError(
+          tgMsg ||
+            "Cannot access this channel. Make sure the bot is added as admin and the channel username is correct",
+          400
+        )
+      );
+    }
+
+    if (!chatResp.data?.ok || !chatResp.data?.result) {
+      return next(
+        new AppError(
+          "Cannot access this channel. Make sure the bot is added as admin and the channel username is correct",
+          400
+        )
+      );
+    }
+
+    const chatInfo = chatResp.data.result;
+
+    await ConnectedAccount.findOneAndUpdate(
+      { userId, platform: "telegram" },
+      {
+        userId,
+        platform: "telegram",
+        accountExternalId: String(chatInfo.id),
+        accountName: chatInfo.title || normalizedChannel,
+        accessToken: botToken,
+        isActive: true,
+        meta: {
+          channelUsername: normalizedChannel,
+          botUsername: botInfo.username,
+          chatId: chatInfo.id,
+          chatType: chatInfo.type,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    return sendSuccess(
+      req,
+      res,
+      {
+        connected: true,
+        telegram: {
+          channelId: String(chatInfo.id),
+          title: chatInfo.title || normalizedChannel,
+          channelUsername: normalizedChannel,
+          botUsername: botInfo.username,
+        },
+      },
+      200,
+      "Telegram connected successfully"
+    );
 };

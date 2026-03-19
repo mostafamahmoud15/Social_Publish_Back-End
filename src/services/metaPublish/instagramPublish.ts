@@ -1,18 +1,21 @@
 import axios from "axios";
 import AppError from "../../utils/AppError";
 
-/**
- * Truncate long strings to prevent huge logs / payloads.
- */
-function safeTruncate(str: string, max = 4000) {
-  if (!str) return str;
-  return str.length > max ? str.slice(0, max) + "..." : str;
+const IG_API = "https://graph.facebook.com/v24.0";
+
+function normalizeForIg(url: string) {
+  if (!url) return url;
+
+  if (url.includes("res.cloudinary.com") && url.includes("/upload/")) {
+    return url.replace(
+      "/upload/",
+      "/upload/w_1080,h_1350,c_pad,b_white,q_auto:best,f_jpg/"
+    );
+  }
+
+  return url;
 }
 
-/**
- * Returns a safe URL hint (origin + pathname only).
- * Prevents leaking query params in logs.
- */
 function safeUrlHint(url?: string) {
   if (!url) return undefined;
   try {
@@ -23,267 +26,198 @@ function safeUrlHint(url?: string) {
   }
 }
 
-/**
- * Determines if an HTTP status is retryable.
- * Retryable: timeout, rate-limit, server errors.
- */
-function isRetryableStatus(status?: number) {
-  if (!status) return true;
-  return status === 408 || status === 429 || status >= 500;
-}
-
-/**
- * Normalizes Facebook/Instagram Graph API errors from axios.
- */
-function fbErrorFromAxios(e: any) {
-  const status = e?.response?.status;
-  const data = e?.response?.data;
-
-  const fb = data?.error ?? null;
-
-  const message =
-    fb?.message ||
-    (typeof data === "string" ? safeTruncate(data, 8000) : undefined) ||
-    e?.message;
-
+function getFbError(e: any) {
   return {
-    status,
-    fb,
-    message,
-    raw: typeof data === "string" ? safeTruncate(data, 8000) : data,
+    status: e?.response?.status,
+    error: e?.response?.data?.error,
+    message:
+      e?.response?.data?.error?.message ||
+      e?.response?.data?.message ||
+      e?.message ||
+      "Instagram request failed",
+    raw: e?.response?.data,
   };
 }
 
-/**
- * Throws a structured AppError.
- */
-function throwAppError(params: {
-  message: string;
-  status: number;
-  code: string;
-  details?: any[];
-}): never {
-  throw new AppError(
-    params.message,
-    params.status,
-    params.details ?? [],
-    params.code
-  );
+function fail(
+  message: string,
+  code: string,
+  status = 400,
+  details: Record<string, any> = {}
+): never {
+  throw new AppError(message, status, [details], code);
 }
 
-/**
- * Creates an Instagram media container.
- * - Single image: caption allowed
- * - Carousel child: must use is_carousel_item = true (no caption)
- */
-async function createIgMediaContainer(opts: {
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function createMediaContainer(params: {
   igUserId: string;
   accessToken: string;
-  imageUrl: string;
+  imageUrl?: string;
+  videoUrl?: string;
   caption?: string;
   isCarouselItem?: boolean;
+  mediaType?: "IMAGE" | "VIDEO" | "REELS" | "CAROUSEL";
+  children?: string[];
+  shareToFeed?: boolean;
 }) {
-  const { igUserId, accessToken, imageUrl, caption, isCarouselItem } = opts;
+  const {
+    igUserId,
+    accessToken,
+    imageUrl,
+    videoUrl,
+    caption,
+    isCarouselItem,
+    mediaType,
+    children,
+    shareToFeed,
+  } = params;
 
   try {
-    const r = await axios.post(
-      `https://graph.facebook.com/v24.0/${igUserId}/media`,
-      null,
-      {
-        params: {
-          image_url: imageUrl,
-          caption,
-          is_carousel_item: isCarouselItem ? true : undefined,
-          access_token: accessToken,
-        },
-        timeout: 30_000,
-        validateStatus: (s) => s >= 200 && s < 300,
-      }
-    );
+    const { data } = await axios.post(`${IG_API}/${igUserId}/media`, null, {
+      params: {
+        image_url: imageUrl,
+        video_url: videoUrl,
+        caption,
+        is_carousel_item: isCarouselItem || undefined,
+        media_type: mediaType,
+        children: children?.join(","),
+        share_to_feed: shareToFeed,
+        access_token: accessToken,
+      },
+      timeout: 60000,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
 
-    const creationId = r.data?.id;
-
-    if (!creationId) {
-      throwAppError({
-        message: "Instagram returned an invalid media container response",
-        status: 502,
-        code: "IG_CONTAINER_INVALID_RESPONSE",
-        details: [
-          {
-            step: "create_container",
-            igUserId,
-            imageUrlHint: safeUrlHint(imageUrl),
-            response: r.data,
-          },
-        ],
+    if (!data?.id) {
+      fail("Instagram returned invalid container response", "IG_CONTAINER_INVALID", 502, {
+        igUserId,
+        imageUrlHint: safeUrlHint(imageUrl),
+        videoUrlHint: safeUrlHint(videoUrl),
+        response: data,
       });
     }
 
-    return creationId as string;
+    return data.id as string;
   } catch (e: any) {
-    const { status, fb, message, raw } = fbErrorFromAxios(e);
-    const httpStatus = status ?? 502;
-
-    throwAppError({
-      message: "Failed to create Instagram media container",
-      status: isRetryableStatus(httpStatus) ? 502 : 400,
-      code: "IG_CONTAINER_CREATE_FAILED",
-      details: [
-        {
-          step: "create_container",
-          igUserId,
-          imageUrlHint: safeUrlHint(imageUrl),
-          isCarouselItem: !!isCarouselItem,
-          httpStatus,
-          retryable: isRetryableStatus(httpStatus),
-          fbError: fb,
-          errorMessage: message,
-          response: raw,
-        },
-      ],
+    const err = getFbError(e);
+    fail("Failed to create Instagram media container", "IG_CONTAINER_CREATE_FAILED", err.status || 502, {
+      igUserId,
+      imageUrlHint: safeUrlHint(imageUrl),
+      videoUrlHint: safeUrlHint(videoUrl),
+      mediaType,
+      childrenCount: children?.length || 0,
+      fbError: err.error,
+      errorMessage: err.message,
+      response: err.raw,
     });
   }
 }
 
-/**
- * Creates the parent CAROUSEL container.
- * Must be called after all child containers are created.
- */
-async function createCarouselParentContainer(opts: {
-  igUserId: string;
-  accessToken: string;
-  caption: string;
-  children: string[];
-}) {
-  const { igUserId, accessToken, caption, children } = opts;
-
-  try {
-    const parentResp = await axios.post(
-      `https://graph.facebook.com/v24.0/${igUserId}/media`,
-      null,
-      {
-        params: {
-          media_type: "CAROUSEL",
-          children: children.join(","),
-          caption,
-          access_token: accessToken,
-        },
-        timeout: 30_000,
-        validateStatus: (s) => s >= 200 && s < 300,
-      }
-    );
-
-    const id = parentResp.data?.id;
-
-    if (!id) {
-      throwAppError({
-        message:
-          "Instagram returned an invalid carousel container response",
-        status: 502,
-        code: "IG_CAROUSEL_INVALID_RESPONSE",
-        details: [
-          {
-            step: "create_carousel_parent",
-            igUserId,
-            childrenCount: children.length,
-            response: parentResp.data,
-          },
-        ],
-      });
-    }
-
-    return id as string;
-  } catch (e: any) {
-    const { status, fb, message, raw } = fbErrorFromAxios(e);
-    const httpStatus = status ?? 502;
-
-    throwAppError({
-      message: "Failed to create Instagram carousel container",
-      status: isRetryableStatus(httpStatus) ? 502 : 400,
-      code: "IG_CAROUSEL_CREATE_FAILED",
-      details: [
-        {
-          step: "create_carousel_parent",
-          igUserId,
-          childrenCount: children.length,
-          httpStatus,
-          retryable: isRetryableStatus(httpStatus),
-          fbError: fb,
-          errorMessage: message,
-          response: raw,
-        },
-      ],
-    });
-  }
-}
-
-/**
- * Publishes a container and returns the final media id.
- */
-async function publishIgContainer(opts: {
+async function publishContainer(params: {
   igUserId: string;
   accessToken: string;
   creationId: string;
 }) {
-  const { igUserId, accessToken, creationId } = opts;
+  const { igUserId, accessToken, creationId } = params;
 
   try {
-    const r = await axios.post(
-      `https://graph.facebook.com/v24.0/${igUserId}/media_publish`,
+    const { data } = await axios.post(
+      `${IG_API}/${igUserId}/media_publish`,
       null,
       {
         params: {
           creation_id: creationId,
           access_token: accessToken,
         },
-        timeout: 30_000,
+        timeout: 30000,
         validateStatus: (s) => s >= 200 && s < 300,
       }
     );
 
-    const mediaId = r.data?.id;
-
-    if (!mediaId) {
-      throwAppError({
-        message: "Instagram returned an invalid publish response",
-        status: 502,
-        code: "IG_PUBLISH_INVALID_RESPONSE",
-        details: [
-          { step: "publish", igUserId, creationId, response: r.data },
-        ],
+    if (!data?.id) {
+      fail("Instagram returned invalid publish response", "IG_PUBLISH_INVALID", 502, {
+        igUserId,
+        creationId,
+        response: data,
       });
     }
 
-    return mediaId as string;
+    return data.id as string;
   } catch (e: any) {
-    const { status, fb, message, raw } = fbErrorFromAxios(e);
-    const httpStatus = status ?? 502;
-
-    throwAppError({
-      message: "Failed to publish Instagram media",
-      status: isRetryableStatus(httpStatus) ? 502 : 400,
-      code: "IG_PUBLISH_FAILED",
-      details: [
-        {
-          step: "publish",
-          igUserId,
-          creationId,
-          httpStatus,
-          retryable: isRetryableStatus(httpStatus),
-          fbError: fb,
-          errorMessage: message,
-          response: raw,
-        },
-      ],
+    const err = getFbError(e);
+    fail("Failed to publish Instagram media", "IG_PUBLISH_FAILED", err.status || 502, {
+      igUserId,
+      creationId,
+      fbError: err.error,
+      errorMessage: err.message,
+      response: err.raw,
     });
   }
 }
 
-/**
- * Publishes either:
- * - Single image
- * - Carousel of images
- */
+async function waitUntilReady(params: {
+  creationId: string;
+  accessToken: string;
+  maxAttempts?: number;
+  delayMs?: number;
+}) {
+  const {
+    creationId,
+    accessToken,
+    maxAttempts = 20,
+    delayMs = 3000,
+  } = params;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const { data } = await axios.get(`${IG_API}/${creationId}`, {
+        params: {
+          fields: "status_code,status",
+          access_token: accessToken,
+        },
+        timeout: 30000,
+        validateStatus: (s) => s >= 200 && s < 300,
+      });
+
+      const status = data?.status_code || data?.status;
+
+      if (["FINISHED", "READY", "PUBLISHED"].includes(status)) {
+        return;
+      }
+
+      if (["ERROR", "EXPIRED"].includes(status)) {
+        fail("Instagram media processing failed", "IG_CONTAINER_PROCESSING_FAILED", 502, {
+          creationId,
+          attempt,
+          response: data,
+        });
+      }
+    } catch (e: any) {
+      const err = getFbError(e);
+
+      if (err.status && err.status < 500 && err.status !== 429 && err.status !== 408) {
+        fail("Failed while checking Instagram container status", "IG_CONTAINER_STATUS_FAILED", err.status, {
+          creationId,
+          attempt,
+          fbError: err.error,
+          errorMessage: err.message,
+          response: err.raw,
+        });
+      }
+    }
+
+    await sleep(delayMs);
+  }
+
+  fail("Instagram media processing timed out", "IG_CONTAINER_PROCESSING_TIMEOUT", 504, {
+    creationId,
+    maxAttempts,
+  });
+}
+
 export async function publishInstagramImages(opts: {
   igUserId: string;
   accessToken: string;
@@ -293,40 +227,28 @@ export async function publishInstagramImages(opts: {
   const { igUserId, accessToken, caption, imageUrls } = opts;
 
   if (!igUserId || !accessToken) {
-    throwAppError({
-      message: "Instagram account token is missing",
-      status: 400,
-      code: "IG_AUTH_MISSING",
-      details: [
-        {
-          step: "validate",
-          hasIgUserId: !!igUserId,
-          hasAccessToken: !!accessToken,
-        },
-      ],
+    fail("Instagram account token is missing", "IG_AUTH_MISSING", 400, {
+      hasIgUserId: !!igUserId,
+      hasAccessToken: !!accessToken,
     });
   }
 
   if (!imageUrls?.length) {
-    throwAppError({
-      message: "No images provided for Instagram",
-      status: 400,
-      code: "IG_IMAGES_MISSING",
-      details: [{ step: "validate" }],
-    });
+    fail("No images provided for Instagram", "IG_IMAGES_MISSING", 400);
   }
 
+  const safeImages = imageUrls.map(normalizeForIg);
+
   try {
-    // Single image flow
-    if (imageUrls.length === 1) {
-      const creationId = await createIgMediaContainer({
+    if (safeImages.length === 1) {
+      const creationId = await createMediaContainer({
         igUserId,
         accessToken,
-        imageUrl: imageUrls[0],
+        imageUrl: safeImages[0],
         caption,
       });
 
-      const mediaId = await publishIgContainer({
+      const mediaId = await publishContainer({
         igUserId,
         accessToken,
         creationId,
@@ -335,50 +257,100 @@ export async function publishInstagramImages(opts: {
       return { mediaId };
     }
 
-    // Carousel flow
     const children: string[] = [];
 
-    for (const url of imageUrls) {
-      const childId = await createIgMediaContainer({
+    for (const imageUrl of safeImages) {
+      const childId = await createMediaContainer({
         igUserId,
         accessToken,
-        imageUrl: url,
+        imageUrl,
         isCarouselItem: true,
       });
 
       children.push(childId);
     }
 
-    const parentCreationId =
-      await createCarouselParentContainer({
-        igUserId,
-        accessToken,
-        caption,
-        children,
-      });
-
-    const mediaId = await publishIgContainer({
+    const parentId = await createMediaContainer({
       igUserId,
       accessToken,
-      creationId: parentCreationId,
+      caption,
+      mediaType: "CAROUSEL",
+      children,
+    });
+
+    const mediaId = await publishContainer({
+      igUserId,
+      accessToken,
+      creationId: parentId,
     });
 
     return { mediaId, children };
   } catch (e: any) {
     if (e instanceof AppError) throw e;
 
-    throwAppError({
-      message: "Instagram publish failed",
-      status: 502,
-      code: "IG_PUBLISH_UNEXPECTED",
-      details: [
-        {
-          step: "unknown",
-          igUserId,
-          imagesCount: imageUrls.length,
-          errorMessage: e?.message,
-        },
-      ],
+    fail("Instagram publish failed", "IG_PUBLISH_UNEXPECTED", 502, {
+      igUserId,
+      imagesCount: imageUrls.length,
+      errorMessage: e?.message,
+    });
+  }
+}
+
+export async function publishInstagramVideo(opts: {
+  igUserId: string;
+  accessToken: string;
+  caption: string;
+  videoUrl: string;
+  shareToFeed?: boolean;
+}) {
+  const {
+    igUserId,
+    accessToken,
+    caption,
+    videoUrl,
+    shareToFeed = true,
+  } = opts;
+
+  if (!igUserId || !accessToken) {
+    fail("Instagram account token is missing", "IG_AUTH_MISSING", 400, {
+      hasIgUserId: !!igUserId,
+      hasAccessToken: !!accessToken,
+    });
+  }
+
+  if (!videoUrl) {
+    fail("No video provided for Instagram", "IG_VIDEO_MISSING", 400);
+  }
+
+  try {
+    const creationId = await createMediaContainer({
+      igUserId,
+      accessToken,
+      videoUrl,
+      caption,
+      mediaType: "REELS",
+      shareToFeed,
+    });
+
+    await waitUntilReady({
+      creationId,
+      accessToken,
+    });
+
+    const mediaId = await publishContainer({
+      igUserId,
+      accessToken,
+      creationId,
+    });
+
+    return { mediaId, creationId };
+  } catch (e: any) {
+    if (e instanceof AppError) throw e;
+
+    fail("Instagram video publish failed", "IG_VIDEO_PUBLISH_UNEXPECTED", 502, {
+      igUserId,
+      videoUrlHint: safeUrlHint(videoUrl),
+      errorMessage: e?.message,
     });
   }
 }

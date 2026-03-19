@@ -111,18 +111,19 @@ export async function publishFacebookMultiPhotoPost(opts: {
   try {
     const photoIds: string[] = [];
 
-    // 1) Upload photos as unpublished (we attach them later)
+    // Upload photos as unpublished (we attach them later)
     for (let i = 0; i < imageUrls.length; i++) {
+      // loop on url one by one
       const url = imageUrls[i];
 
       try {
-        const r = await axios.post(`https://graph.facebook.com/v24.0/${pageId}/photos`, null, {
+        const res = await axios.post(`https://graph.facebook.com/v24.0/${pageId}/photos`, null, {
           params: { url, published: false, access_token: pageAccessToken },
           timeout: 30_000,
           validateStatus: (s) => s >= 200 && s < 300,
         });
 
-        const id = r.data?.id;
+        const id = res.data?.id;
         if (!id) {
           throwAppError({
             message: "Facebook returned an invalid photo upload response",
@@ -133,8 +134,8 @@ export async function publishFacebookMultiPhotoPost(opts: {
                 step: "upload_photo",
                 ...ctxBase,
                 index: i,
-                imageUrlHint: safeUrlHint(url),
-                response: r.data,
+                imageUrl: safeUrlHint(url),
+                response: res.data,
               },
             ],
           });
@@ -235,6 +236,100 @@ export async function publishFacebookMultiPhotoPost(opts: {
           step: "unknown",
           ...ctxBase,
           errorMessage: e?.message,
+        },
+      ],
+    });
+  }
+}
+
+
+
+
+
+
+export async function publishFacebookVideoPost(opts: {
+  pageId: string;
+  pageAccessToken: string;
+  message: string;
+  videoUrl: string;
+}) {
+  const { pageId, pageAccessToken, message, videoUrl } = opts;
+
+  if (!pageId || !pageAccessToken) {
+    throwAppError({
+      message: "Facebook account token is missing",
+      status: 400,
+      code: "FB_AUTH_MISSING",
+      details: [{ step: "validate", hasPageId: !!pageId, hasAccessToken: !!pageAccessToken }],
+    });
+  }
+
+  if (!videoUrl) {
+    throwAppError({
+      message: "No video provided for Facebook",
+      status: 400,
+      code: "FB_VIDEO_MISSING",
+      details: [{ step: "validate" }],
+    });
+  }
+
+  const ctxBase = {
+    provider: "facebook",
+    pageId,
+    videoUrlHint: safeUrlHint(videoUrl),
+  };
+
+  try {
+    const resp = await axios.post(
+      `https://graph.facebook.com/v24.0/${pageId}/videos`,
+      null,
+      {
+        params: {
+          file_url: videoUrl,
+          description: message,
+          access_token: pageAccessToken,
+        },
+        timeout: 60_000,
+        validateStatus: (s) => s >= 200 && s < 300,
+      }
+    );
+
+    const videoId = resp.data?.id;
+    if (!videoId) {
+      throwAppError({
+        message: "Facebook returned an invalid video creation response",
+        status: 502,
+        code: "FB_VIDEO_INVALID_RESPONSE",
+        details: [
+          {
+            step: "create_video",
+            ...ctxBase,
+            response: resp.data,
+          },
+        ],
+      });
+    }
+
+    return { videoId };
+  } catch (e: any) {
+    if (e instanceof AppError) throw e;
+
+    const { status, fb, message: fbMsg, raw } = fbErrorFromAxios(e);
+    const httpStatus = status ?? 502;
+
+    throwAppError({
+      message: "Failed to publish Facebook video",
+      status: isRetryableStatus(httpStatus) ? 502 : 400,
+      code: "FB_VIDEO_PUBLISH_FAILED",
+      details: [
+        {
+          step: "create_video",
+          ...ctxBase,
+          httpStatus,
+          retryable: isRetryableStatus(httpStatus),
+          fbError: fb,
+          errorMessage: fbMsg,
+          response: raw,
         },
       ],
     });

@@ -15,7 +15,7 @@ import { sendSuccess } from "../../utils/response";
 function userDTO(user: any) {
   return {
     id: user._id,
-    name: user.username,
+    username: user.username,
     email: user.email,
     role: user.role,
   };

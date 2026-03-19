@@ -18,7 +18,7 @@ const globalErrorHandler = (
 ) => {
 
   // Default to 500 if status not provided
-  const status = err.status || 500;
+  const status = err.statusCode || 500;
 
   // Log unexpected server errors (5xx)
   if (status >= 500) {

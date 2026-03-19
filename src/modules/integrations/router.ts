@@ -1,6 +1,7 @@
 import express from "express";
 import authenticate from "../../middleware/auth";
 import {
+  connectTelegram,
   getConnectionsStatus,
   metaCallback,
   metaPages,
@@ -9,6 +10,9 @@ import {
   setPlatformActive,
   tiktokCallback,
   tiktokStartUrl,
+  youtubeCallback,
+  youtubeChannel,
+  youtubeStartUrl,
 } from "./controller";
 import ApiError from "../../middleware/ApiError";
 import validate from "../../middleware/validate";
@@ -23,13 +27,31 @@ router.get("/meta/start", authenticate, ApiError(metaStartUrl));
 router.get("/meta/callback", ApiError(metaCallback));
 
 router.get("/meta/pages", authenticate, ApiError(metaPages));
-router.post("/meta/select-page", authenticate, ApiError(metaSelectPage));
+router.post("/meta/select-page", authenticate, metaSelectPage);
 
 /**
  * TikTok OAuth flow
  */
 router.get("/tiktok/start", authenticate, ApiError(tiktokStartUrl));
 router.get("/tiktok/callback", ApiError(tiktokCallback));
+
+
+
+/**
+ * Youtube OAuth flow
+ */
+
+
+
+router.get("/youtube/start", authenticate, ApiError(youtubeStartUrl));
+router.get("/youtube/callback", ApiError(youtubeCallback));
+router.get("/youtube/channel", authenticate, ApiError(youtubeChannel));
+
+
+
+
+
+
 
 /**
  * Connected accounts management

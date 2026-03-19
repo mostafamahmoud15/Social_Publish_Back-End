@@ -1,8 +1,8 @@
-import { Schema, model } from "mongoose";
+import { Schema, model, models } from "mongoose";
 
 /**
  * OAuth state model.
- * 
+ *
  * Used to temporarily store OAuth flow state data:
  * - Prevent CSRF
  * - Link state to a specific user
@@ -22,18 +22,18 @@ const OAuthStateSchema = new Schema(
     // Prevents reusing the same state twice
     used: { type: Boolean, default: false },
 
-    // OAuth provider (e.g., Meta or TikTok)
+    // OAuth provider
     provider: {
       type: String,
-      enum: ["meta", "tiktok"],
-      default: "meta",
+      enum: ["meta", "tiktok", "youtube"],
+      required: true,
       index: true,
     },
 
-    // Used for PKCE flow (if applicable)
+    // Used for PKCE flow (TikTok / X)
     codeVerifier: { type: String },
 
-    // Platform requested during OAuth (if applicable)
+    // Platform requested during OAuth (Meta only for now)
     requestedPlatform: {
       type: String,
       enum: ["facebook", "instagram"],
@@ -50,10 +50,10 @@ const OAuthStateSchema = new Schema(
   { timestamps: true }
 );
 
-
 // Automatically deletes documents when expiresAt is reached.
-
 OAuthStateSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-export const OAuthState = model("OAuthState", OAuthStateSchema);
+export const OAuthState =
+  models.OAuthState || model("OAuthState", OAuthStateSchema);
+
 export default OAuthState;

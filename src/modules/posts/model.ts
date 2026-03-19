@@ -105,6 +105,8 @@ const PublishResultsSchema = new Schema(
     facebook: { type: PlatformResultSchema, required: true },
     instagram: { type: PlatformResultSchema, required: true },
     tiktok: { type: PlatformResultSchema, required: true },
+    youtube: { type: PlatformResultSchema, required: true },
+    x: { type: PlatformResultSchema, required: true },
   },
   { _id: false }
 );
@@ -171,6 +173,8 @@ const PostSchema = new Schema(
       facebook: { type: Boolean, default: false },
       instagram: { type: Boolean, default: false },
       tiktok: { type: Boolean, default: false },
+      youtube: { type: Boolean, default: false },
+      x: { type: Boolean, default: false },
     },
 
     /**
@@ -184,6 +188,8 @@ const PostSchema = new Schema(
         facebook: { status: "idle" },
         instagram: { status: "idle" },
         tiktok: { status: "idle" },
+        youtube: { status: "idle" },
+        x: { status: "idle" },
       }),
     },
 
