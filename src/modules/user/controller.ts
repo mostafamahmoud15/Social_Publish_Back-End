@@ -55,8 +55,14 @@ export const createUser = async (req: AuthenticatedRequest, res: Response, next:
       )
     );
   }
+
+
+
+
  // Create the user (override email with normalized value)
   const newUser = new User(req.body);
+
+
 
    // Save to database
   await newUser.save();

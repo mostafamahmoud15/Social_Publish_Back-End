@@ -43,7 +43,7 @@ const schema = new mongoose.Schema<IUser>(
   }
 );
 
-const salt = process.env.SALT_ROUNDS;
+const salt = Number(process.env.SALT_ROUNDS);
 
 if (!salt) {
   throw new Error("SALT_ROUNDS is not defined");
