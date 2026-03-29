@@ -5,17 +5,26 @@ import path from "path";
 import crypto from "crypto";
 import AppError from "../../utils/AppError";
 
-const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
-const MAX_VIDEO_SIZE = 500 * 1024 * 1024;
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB per chunk
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB max allowed size
 
+/**
+ * Helper to create a standardized AppError
+ */
 function createError(message: string, status: number, code: string, details?: any) {
   return new AppError(message, status, details ? [details] : [], code);
 }
 
+/**
+ * Determine if a request should be retried based on HTTP status
+ */
 function shouldRetry(status?: number) {
   return status === 408 || status === 429 || (status && status >= 500);
 }
 
+/**
+ * Safely parse a fetch response (JSON or text fallback)
+ */
 async function parseResponse(res: Response) {
   try {
     return await res.json();
@@ -28,6 +37,9 @@ async function parseResponse(res: Response) {
   }
 }
 
+/**
+ * Download video from remote URL and store it temporarily
+ */
 async function downloadVideo(videoUrl: string) {
   const fileName = `tiktok_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.mp4`;
   const filePath = path.join(os.tmpdir(), fileName);
@@ -57,6 +69,9 @@ async function downloadVideo(videoUrl: string) {
     );
   }
 
+  /**
+   * Stream video into a temp file while checking max size
+   */
   await new Promise<void>((resolve, reject) => {
     const writer = fs.createWriteStream(filePath);
     let total = 0;
@@ -93,6 +108,9 @@ async function downloadVideo(videoUrl: string) {
 
   const stats = fs.statSync(filePath);
 
+  /**
+   * Validate downloaded file is not empty
+   */
   if (!stats.size) {
     fs.unlinkSync(filePath);
 
@@ -107,12 +125,18 @@ async function downloadVideo(videoUrl: string) {
   return { filePath, fileSize: stats.size };
 }
 
+/**
+ * Read a chunk from file using file descriptor
+ */
 async function readChunk(fd: fs.promises.FileHandle, start: number, length: number) {
   const buffer = Buffer.alloc(length);
   const { bytesRead } = await fd.read(buffer, 0, length, start);
   return buffer.subarray(0, bytesRead);
 }
 
+/**
+ * Main TikTok publishing function
+ */
 export async function publishTikTokVideo({
   accessToken,
   videoUrl,
@@ -121,7 +145,7 @@ export async function publishTikTokVideo({
   disable_comment = false,
   disable_duet = false,
   disable_stitch = false,
-  forcePrivate = true,
+  forcePrivate = false,
 }: {
   accessToken: string;
   videoUrl: string;
@@ -136,15 +160,31 @@ export async function publishTikTokVideo({
   let fileHandle: fs.promises.FileHandle | null = null;
 
   try {
-    // 1️⃣ download video
+    /**
+     * Step 1: Download video locally
+     */
     const { filePath: tempPath, fileSize } = await downloadVideo(videoUrl);
     filePath = tempPath;
 
+    /**
+     * Step 2: Calculate chunking strategy
+     */
     const chunkSize = fileSize <= 5 * 1024 * 1024 ? fileSize : CHUNK_SIZE;
     const totalChunks = Math.ceil(fileSize / chunkSize);
-    const privacy = forcePrivate ? "SELF_ONLY" : (privacy_level ?? "SELF_ONLY");
 
-    // 2️⃣ init upload with TikTok
+    /**
+     * Privacy handling:
+     * - If forcePrivate = true → override everything to SELF_ONLY
+     * - Otherwise → use provided privacy_level
+     * - Default fallback → PUBLIC
+     */
+    const privacy = forcePrivate
+      ? "SELF_ONLY"
+      : (privacy_level ?? "PUBLIC_TO_EVERYONE");
+
+    /**
+     * Step 3: Initialize TikTok upload session
+     */
     const initRes = await fetch(
       "https://open.tiktokapis.com/v2/post/publish/video/init/",
       {
@@ -201,7 +241,9 @@ export async function publishTikTokVideo({
       );
     }
 
-    // 3️⃣ upload chunks
+    /**
+     * Step 4: Upload video in chunks
+     */
     fileHandle = await fs.promises.open(filePath, "r");
 
     for (let i = 0; i < totalChunks; i++) {
@@ -245,7 +287,11 @@ export async function publishTikTokVideo({
       }
     }
 
+    /**
+     * Return publish id (used later to track status)
+     */
     return { publish_id: publishId };
+
   } catch (error: any) {
     if (error instanceof AppError) throw error;
 
@@ -255,7 +301,13 @@ export async function publishTikTokVideo({
       "TIKTOK_UNEXPECTED",
       { errorMessage: error?.message }
     );
+
   } finally {
+    /**
+     * Cleanup resources:
+     * - Close file handle
+     * - Delete temp file
+     */
     try {
       if (fileHandle) await fileHandle.close();
     } catch {}

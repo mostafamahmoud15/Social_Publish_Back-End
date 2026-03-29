@@ -28,7 +28,16 @@ import {
 } from "./post.publish.utils";
 import { executePublishing } from "./post.publish.executor";
 
-export async function createPostAndMaybePublish(
+/**
+ * =========================
+ * CREATE + PUBLISH FLOW
+ * =========================
+ *
+ * Handles:
+ * - Draft creation
+ * - Immediate publishing
+ */
+export async function publishPost(
   input: CreatePostServiceInput
 ): Promise<CreatePostServiceResult> {
   const {
@@ -42,13 +51,27 @@ export async function createPostAndMaybePublish(
     youtubeSettings,
   } = input;
 
+  /**
+   * Ensure user is authenticated
+   */
   if (!userId) throw new AppError("Unauthorized", 401);
 
+  /**
+   * Validate media type (images / video only)
+   */
   ensureValidMedia(media);
 
+  /**
+   * Normalize hashtags and build final message
+   */
   const hashtagsArr = asStringArray(hashtags);
   const message = buildMessage(String(caption || ""), hashtagsArr);
 
+  /**
+   * Create post in DB
+   * - draft → stays draft
+   * - publish → starts as queued
+   */
   const post = await Post.create({
     user: userId,
     action,
@@ -61,10 +84,16 @@ export async function createPostAndMaybePublish(
 
   ensurePublishResults(post);
 
+  /**
+   * If draft → no publishing
+   */
   if (action === "draft") {
     return { post };
   }
 
+  /**
+   * Extract selected platforms
+   */
   const selected = getSelectedPlatforms(targets);
 
   if (selected.length === 0) {
@@ -77,8 +106,14 @@ export async function createPostAndMaybePublish(
     };
   }
 
+  /**
+   * Mark platforms that are incompatible with media type
+   */
   markIncompatiblePlatforms(post, selected, media.kind);
 
+  /**
+   * Keep only compatible platforms
+   */
   const compatibleSelected = selected.filter((p) =>
     isPlatformCompatible(p, media.kind)
   );
@@ -93,11 +128,20 @@ export async function createPostAndMaybePublish(
     };
   }
 
+  /**
+   * Load connected accounts for selected platforms
+   */
   const byPlatform = await loadActiveAccounts(String(userId), compatibleSelected);
 
+  /**
+   * Mark missing / disconnected platforms
+   */
   const missing = compatibleSelected.filter((p) => !byPlatform.has(p));
   markMissingAccounts(post, missing);
 
+  /**
+   * If no platform is connected → fail early
+   */
   if (missing.length === compatibleSelected.length) {
     post.status = "failed";
     await post.save();
@@ -108,9 +152,15 @@ export async function createPostAndMaybePublish(
     };
   }
 
+  /**
+   * Move post to publishing state
+   */
   post.status = "publishing";
   await post.save();
 
+  /**
+   * Execute publishing across platforms
+   */
   await executePublishing({
     post,
     platforms: compatibleSelected,
@@ -121,9 +171,19 @@ export async function createPostAndMaybePublish(
     youtubeSettings,
   });
 
+  /**
+   * Finalize status + persist result
+   */
   return await saveFinalized(post);
 }
 
+/**
+ * =========================
+ * RETRY FLOW
+ * =========================
+ *
+ * Handles retrying failed / partial posts.
+ */
 export async function retryPostPublishing(
   input: RetryPostServiceInput
 ): Promise<CreatePostServiceResult> {
@@ -136,24 +196,41 @@ export async function retryPostPublishing(
     youtubeSettings,
   } = input;
 
+  /**
+   * Auth check
+   */
   if (!requesterId) {
     throw new AppError("Unauthorized", 401);
   }
 
+  /**
+   * Load post
+   */
   const existing = await Post.findById(postId);
   if (!existing) {
     throw new AppError("Post not found", 404);
   }
 
+  /**
+   * Permission check:
+   * - owner can retry anything
+   * - otherwise must be post owner
+   */
   const isOwner = requesterRole === "owner";
   if (!isOwner && String((existing as any).user) !== String(requesterId)) {
     throw new AppError("Forbidden", 403);
   }
 
+  /**
+   * Retry allowed only for publish actions
+   */
   if ((existing as any).action !== "publish") {
     throw new AppError("This post is not a publish action", 400);
   }
 
+  /**
+   * Retry allowed only for specific statuses
+   */
   const retryablePostStatuses: PostStatus[] = ["failed", "partial", "queued"];
   if (!retryablePostStatuses.includes(existing.status)) {
     throw new AppError(
@@ -162,6 +239,9 @@ export async function retryPostPublishing(
     );
   }
 
+  /**
+   * Lock the post to prevent concurrent publishing
+   */
   const locked = await Post.findOneAndUpdate(
     { _id: postId, status: { $ne: "publishing" } },
     { $set: { status: "publishing" } },
@@ -181,6 +261,9 @@ export async function retryPostPublishing(
     const media = post.media;
     const targets = post.targets || {};
 
+    /**
+     * Optional: retry only a specific platform
+     */
     const hasRequestedPlatform =
       onlyPlatform !== undefined &&
       onlyPlatform !== null &&
@@ -192,12 +275,18 @@ export async function retryPostPublishing(
       throw new AppError("Invalid platform value", 400);
     }
 
+    /**
+     * Get originally selected platforms
+     */
     const targeted = ALL_PLATFORMS.filter((p) => targets?.[p] === true);
 
     if (targeted.length === 0) {
       return await saveFinalized(post, "No platforms selected for this post.");
     }
 
+    /**
+     * Validate requested platform is part of the original targets
+     */
     if (requestedPlatform && !targeted.includes(requestedPlatform)) {
       return await saveFinalized(
         post,
@@ -205,6 +294,11 @@ export async function retryPostPublishing(
       );
     }
 
+    /**
+     * Build retry candidates:
+     * - compatible with media
+     * - failed / retryable
+     */
     let candidates = targeted
       .filter((p) => isPlatformCompatible(p, media.kind))
       .filter((p) => shouldRetryPlatform(post, p));
@@ -222,8 +316,14 @@ export async function retryPostPublishing(
       );
     }
 
+    /**
+     * Load active accounts for retry
+     */
     const byPlatform = await loadActiveAccounts(String(post.user), candidates);
 
+    /**
+     * Reset platform results before retry
+     */
     for (const p of candidates) {
       setPlatformResult(post, p, {
         status: byPlatform.has(p) ? "idle" : "failed",
@@ -233,6 +333,9 @@ export async function retryPostPublishing(
       });
     }
 
+    /**
+     * Only retry platforms that are actually connected
+     */
     const runnable = candidates.filter((p) => byPlatform.has(p));
 
     if (runnable.length === 0) {
@@ -244,11 +347,17 @@ export async function retryPostPublishing(
       );
     }
 
+    /**
+     * Build message again from caption + hashtags
+     */
     const message = buildMessage(
       String(post.caption || ""),
       asStringArray(post.hashtags || [])
     );
 
+    /**
+     * Execute retry publishing
+     */
     await executePublishing({
       post,
       platforms: runnable,
@@ -261,12 +370,16 @@ export async function retryPostPublishing(
 
     return await saveFinalized(post);
   } finally {
+    /**
+     * Safety fallback:
+     * Ensure post is finalized even if something fails mid-flow
+     */
     if (post.status === "publishing") {
       try {
         const fin = finalizeStatus(post);
         post.status = fin.status;
         await post.save();
-      } catch { }
+      } catch {}
     }
   }
 }

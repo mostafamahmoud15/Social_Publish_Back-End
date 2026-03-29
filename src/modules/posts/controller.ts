@@ -7,7 +7,7 @@ import { ApiFeatures } from "../../utils/ApiFeatures";
 
 
 import {
-  createPostAndMaybePublish,
+  publishPost,
   retryPostPublishing,
 } from "./post.publish.service";
 
@@ -19,7 +19,7 @@ export const createPost = async (
   const userId = req.user?._id;
   if (!userId) return next(new AppError("Unauthorized", 401));
 
-  const result = await createPostAndMaybePublish({
+  const result = await publishPost({
     userId: String(userId),
     action: req.body.action,
     caption: req.body.caption,
@@ -54,14 +54,27 @@ export const retryPublishPost = async (
     return next(new AppError("Invalid post id", 400));
   }
 
+  const platform =
+    typeof req.query.platform === "string" ? req.query.platform : undefined;
 
   const result = await retryPostPublishing({
     postId,
     requesterId: String(user._id),
     requesterRole: String(user.role || ""),
-    onlyPlatform: req.query.platform,
-    tiktokSettings: req.body?.tiktokSettings,
-    youtubeSettings: req.body?.youtubeSettings,
+    onlyPlatform: platform,
+
+    // Force retry defaults for TikTok
+    tiktokSettings: {
+      privacy_level: "PUBLIC_TO_EVERYONE",
+      disable_comment: false,
+      disable_duet: false,
+      disable_stitch: false,
+    },
+
+    // Force retry defaults for YouTube
+    youtubeSettings: {
+      privacyStatus: "public",
+    },
   });
 
   return sendSuccess(
@@ -85,14 +98,12 @@ export const retryPublishPost = async (
  * - Regular users can only view posts that belong to them.
  *
  * Supported features:
- * - Search by caption or hashtags
  * - Pagination with configurable limits
  * - Sorted by newest posts first
  *
  * Query parameters handled by ApiFeatures:
  * - page
  * - limit
- * - search
  */
 
 export const getAllPosts = async (

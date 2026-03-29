@@ -8,6 +8,11 @@ import { publishInstagramImages, publishInstagramVideo } from "../../services/me
 import { publishTikTokVideo } from "../../services/tiktokPublish/tiktokPublish";
 import { publishYouTubeVideo } from "../../services/youtubePublish/youtubePublish";
 
+/**
+ * =========================
+ * Facebook Publishing Logic
+ * =========================
+ */
 async function publishFacebook(params: {
   post: any;
   byPlatform: Map<Platform, any>;
@@ -16,13 +21,14 @@ async function publishFacebook(params: {
 }) {
   const { post, byPlatform, message, media } = params;
 
+  // Skip if Facebook is not selected
   if (!byPlatform.has("facebook")) return;
 
   try {
     const acc: any = byPlatform.get("facebook");
 
     /**
-     * ✅ Images
+     * Handle image posts
      */
     if (media.kind === "images") {
       const imageUrls = getImageUrls(media);
@@ -55,7 +61,7 @@ async function publishFacebook(params: {
     }
 
     /**
-     * ✅ Video
+     * Handle video posts
      */
     if (media.kind === "video") {
       const videoUrl = media?.video?.url;
@@ -88,7 +94,7 @@ async function publishFacebook(params: {
     }
 
     /**
-     * ❌ Unsupported
+     * Unsupported media type
      */
     setPlatformResult(post, "facebook", {
       status: "failed",
@@ -111,6 +117,11 @@ async function publishFacebook(params: {
   }
 }
 
+/**
+ * =========================
+ * Instagram Publishing Logic
+ * =========================
+ */
 async function publishInstagram(params: {
   post: any;
   byPlatform: Map<Platform, any>;
@@ -125,7 +136,7 @@ async function publishInstagram(params: {
     const acc: any = byPlatform.get("instagram");
 
     /**
-     * ✅ Images
+     * Handle image posts
      */
     if (media.kind === "images") {
       const imageUrls = getImageUrls(media);
@@ -158,7 +169,7 @@ async function publishInstagram(params: {
     }
 
     /**
-     * ✅ Video
+     * Handle video posts
      */
     if (media.kind === "video") {
       const videoUrl = media?.video?.url;
@@ -191,9 +202,6 @@ async function publishInstagram(params: {
       return;
     }
 
-    /**
-     * ❌ Unsupported
-     */
     setPlatformResult(post, "instagram", {
       status: "failed",
       externalId: null,
@@ -215,6 +223,11 @@ async function publishInstagram(params: {
   }
 }
 
+/**
+ * =========================
+ * TikTok Publishing Logic
+ * =========================
+ */
 async function publishTikTok(params: {
   post: any;
   byPlatform: Map<Platform, any>;
@@ -224,19 +237,14 @@ async function publishTikTok(params: {
 }) {
   const { post, byPlatform, message, media, tiktokSettings } = params;
 
+  // TikTok supports only video
   if (media.kind !== "video" || !byPlatform.has("tiktok")) return;
 
   const videoUrl = media?.video?.url;
 
-  if (!tiktokSettings?.privacy_level) {
-    setPlatformResult(post, "tiktok", {
-      status: "failed",
-      externalId: null,
-      error: "Missing tiktokSettings.privacy_level",
-      publishedAt: null,
-    });
-    return;
-  }
+  // Retry should default to public if no settings were provided
+  const privacyLevel =
+    tiktokSettings?.privacy_level || "PUBLIC_TO_EVERYONE";
 
   if (!videoUrl) {
     setPlatformResult(post, "tiktok", {
@@ -255,10 +263,11 @@ async function publishTikTok(params: {
       accessToken: acc.accessToken,
       videoUrl,
       caption: message,
-      privacy_level: tiktokSettings.privacy_level,
-      disable_comment: Boolean(tiktokSettings.disable_comment),
-      disable_duet: Boolean(tiktokSettings.disable_duet),
-      disable_stitch: Boolean(tiktokSettings.disable_stitch),
+      privacy_level: privacyLevel,
+      disable_comment: Boolean(tiktokSettings?.disable_comment),
+      disable_duet: Boolean(tiktokSettings?.disable_duet),
+      disable_stitch: Boolean(tiktokSettings?.disable_stitch),
+      forcePrivate: false,
     });
 
     setPlatformResult(post, "tiktok", {
@@ -279,6 +288,11 @@ async function publishTikTok(params: {
   }
 }
 
+/**
+ * =========================
+ * YouTube Publishing Logic
+ * =========================
+ */
 async function publishYouTube(params: {
   post: any;
   byPlatform: Map<Platform, any>;
@@ -286,7 +300,7 @@ async function publishYouTube(params: {
   media: any;
   youtubeSettings?: any;
 }) {
-  const { post, byPlatform, message, media, youtubeSettings } = params;
+  const { post, byPlatform, media, youtubeSettings } = params;
 
   if (media.kind !== "video" || !byPlatform.has("youtube")) return;
 
@@ -323,8 +337,7 @@ async function publishYouTube(params: {
         youtubeSettings?.title ||
         String(post.caption || "").slice(0, 100) ||
         "Untitled video",
-      description: youtubeSettings?.description || message || "",
-      privacyStatus: youtubeSettings?.privacyStatus || "private",
+      privacyStatus: "public",
     });
 
     setPlatformResult(post, "youtube", {
@@ -345,6 +358,14 @@ async function publishYouTube(params: {
   }
 }
 
+/**
+ * =========================
+ * Main Executor
+ * =========================
+ *
+ * Responsible for running publishing across all selected platforms.
+ * Each platform handles its own validation + defaults internally.
+ */
 export async function executePublishing(params: {
   post: any;
   platforms: Platform[];
@@ -364,6 +385,9 @@ export async function executePublishing(params: {
     youtubeSettings,
   } = params;
 
+  /**
+   * Build a filtered map of only connected platforms
+   */
   const runnableMap = new Map<Platform, any>();
 
   for (const p of platforms) {
@@ -372,8 +396,24 @@ export async function executePublishing(params: {
     }
   }
 
+  /**
+   * Execute publishing sequentially
+   * (can be parallelized later if needed)
+   */
   await publishFacebook({ post, byPlatform: runnableMap, message, media });
   await publishInstagram({ post, byPlatform: runnableMap, message, media });
-  await publishTikTok({ post, byPlatform: runnableMap, message, media, tiktokSettings });
-  await publishYouTube({ post, byPlatform: runnableMap, message, media, youtubeSettings });
+  await publishTikTok({
+    post,
+    byPlatform: runnableMap,
+    message,
+    media,
+    tiktokSettings,
+  });
+  await publishYouTube({
+    post,
+    byPlatform: runnableMap,
+    message,
+    media,
+    youtubeSettings,
+  });
 }

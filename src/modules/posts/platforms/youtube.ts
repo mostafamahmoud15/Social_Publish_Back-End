@@ -22,6 +22,12 @@ export const publishYouTubeIfNeeded = async ({
   message,
   youtubeSettings,
 }: Params) => {
+  /**
+   * Skip YouTube publishing if:
+   * - YouTube was not selected
+   * - media is not a video
+   * - no active YouTube account is connected
+   */
   if (!targets?.youtube) return;
   if (media?.kind !== "video") return;
   if (!byPlatform.has("youtube")) return;
@@ -29,6 +35,10 @@ export const publishYouTubeIfNeeded = async ({
   try {
     const ytAcc: any = byPlatform.get("youtube");
 
+    /**
+     * Validate that the connected YouTube account
+     * has a usable access token.
+     */
     if (!ytAcc?.accessToken) {
       setPlatformResult(post, "youtube", {
         status: "failed",
@@ -39,6 +49,14 @@ export const publishYouTubeIfNeeded = async ({
       return;
     }
 
+    /**
+     * Publish video to YouTube.
+     *
+     * Fallback strategy:
+     * - title: explicit title -> post caption -> default label
+     * - description: explicit description -> built message
+     * - privacyStatus: explicit setting -> PUBLIC by default
+     */
     const result = await publishYouTubeVideo({
       accessToken: ytAcc.accessToken,
       refreshToken: ytAcc.meta?.refreshToken,
@@ -46,10 +64,12 @@ export const publishYouTubeIfNeeded = async ({
       videoUrl: media.video.url,
       title: youtubeSettings?.title || post.caption || "Untitled video",
       description: youtubeSettings?.description || message || "",
-      privacyStatus: youtubeSettings?.privacyStatus || "private",
+      privacyStatus: youtubeSettings?.privacyStatus || "public",
     });
 
-
+    /**
+     * Mark platform result as published on success.
+     */
     setPlatformResult(post, "youtube", {
       status: "published",
       externalId: result.videoId,
@@ -57,10 +77,16 @@ export const publishYouTubeIfNeeded = async ({
       publishedAt: new Date(),
     });
   } catch (e: any) {
+    /**
+     * Store the most useful available error message.
+     */
     setPlatformResult(post, "youtube", {
       status: "failed",
       externalId: null,
-      error: e?.response?.data?.error?.message || e?.message || "YouTube publish failed",
+      error:
+        e?.response?.data?.error?.message ||
+        e?.message ||
+        "YouTube publish failed",
       publishedAt: null,
     });
   }

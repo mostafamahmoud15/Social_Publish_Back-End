@@ -3,11 +3,10 @@ import { Platform } from "../../../types/type";
 import AppError from "../../../utils/AppError";
 import { getProviderError } from "../../../utils/publishError";
 
-
 /**
  * Publish to TikTok only when:
  * - media is video
- * - tiktok target is selected
+ * - TikTok target is selected
  * - user has an active connected TikTok account
  */
 export async function publishTikTokIfNeeded(args: {
@@ -16,26 +15,20 @@ export async function publishTikTokIfNeeded(args: {
   media: any;
   byPlatform: Map<Platform, any>;
   message: string;
-  tiktokSettings: any;
+  tiktokSettings?: any;
 }) {
   const { post, targets, media, byPlatform, message, tiktokSettings } = args;
 
+  /**
+   * Skip if TikTok is not applicable for this post
+   */
   if (!(media.kind === "video" && targets.tiktok === true && byPlatform.has("tiktok"))) return;
 
   post.publishResults = post.publishResults || {};
 
-  // TikTok requires privacy settings
-  if (!tiktokSettings?.privacy_level) {
-    post.publishResults.tiktok = {
-      status: "failed",
-      externalId: null,
-      error: "Missing tiktokSettings.privacy_level",
-      publishedAt: null,
-    };
-    return;
-  }
-
-  // Safety: ensure video URL exists
+  /**
+   * Ensure video URL exists (required by TikTok API)
+   */
   const videoUrl = media?.video?.url;
   if (!videoUrl) {
     post.publishResults.tiktok = {
@@ -50,7 +43,9 @@ export async function publishTikTokIfNeeded(args: {
   try {
     const ttAcc: any = byPlatform.get("tiktok");
 
-    // Token must exist (select +accessToken already, but keep safety)
+    /**
+     * Ensure TikTok account has a valid access token
+     */
     if (!ttAcc?.accessToken) {
       post.publishResults.tiktok = {
         status: "failed",
@@ -61,16 +56,33 @@ export async function publishTikTokIfNeeded(args: {
       return;
     }
 
+    /**
+     * Privacy handling:
+     * - Use provided settings if available
+     * - Otherwise default to PUBLIC (no UI dependency)
+     */
+    const privacyLevel =
+      tiktokSettings?.privacy_level || "PUBLIC_TO_EVERYONE";
+
     const result = await publishTikTokVideo({
       accessToken: ttAcc.accessToken,
       videoUrl,
       caption: message,
-      privacy_level: tiktokSettings.privacy_level,
-      disable_comment: Boolean(tiktokSettings.disable_comment),
-      disable_duet: Boolean(tiktokSettings.disable_duet),
-      disable_stitch: Boolean(tiktokSettings.disable_stitch),
+      privacy_level: privacyLevel,
+      disable_comment: Boolean(tiktokSettings?.disable_comment),
+      disable_duet: Boolean(tiktokSettings?.disable_duet),
+      disable_stitch: Boolean(tiktokSettings?.disable_stitch),
+
+      /**
+       * Important:
+       * Ensure we DO NOT force private publishing
+       */
+      forcePrivate: false,
     });
 
+    /**
+     * Mark success result
+     */
     post.publishResults.tiktok = {
       status: "published",
       externalId: result.publish_id,
@@ -78,13 +90,29 @@ export async function publishTikTokIfNeeded(args: {
       publishedAt: new Date(),
     };
   } catch (e: any) {
-    const { message: providerMsg, details } = getProviderError(e, "Tiktok publish failed");
+    /**
+     * Normalize provider error for consistent handling
+     */
+    const { message: providerMsg, details } = getProviderError(
+      e,
+      "Tiktok publish failed"
+    );
+
     post.publishResults.tiktok = {
       status: "failed",
       externalId: null,
       error: providerMsg,
       publishedAt: null,
     };
-    throw new AppError(providerMsg, 502, [{ platform: "tiktok", ...details }], "Tiktok_PUBLISH_FAILED");
+
+    /**
+     * Re-throw as AppError for higher-level handling/logging
+     */
+    throw new AppError(
+      providerMsg,
+      502,
+      [{ platform: "tiktok", ...details }],
+      "Tiktok_PUBLISH_FAILED"
+    );
   }
 }

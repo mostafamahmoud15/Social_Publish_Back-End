@@ -246,7 +246,6 @@ export async function publishFacebookMultiPhotoPost(opts: {
 
 
 
-
 export async function publishFacebookVideoPost(opts: {
   pageId: string;
   pageAccessToken: string;
@@ -255,15 +254,28 @@ export async function publishFacebookVideoPost(opts: {
 }) {
   const { pageId, pageAccessToken, message, videoUrl } = opts;
 
+  /**
+   * Basic validation:
+   * Ensure we have the required Facebook credentials.
+   */
   if (!pageId || !pageAccessToken) {
     throwAppError({
       message: "Facebook account token is missing",
       status: 400,
       code: "FB_AUTH_MISSING",
-      details: [{ step: "validate", hasPageId: !!pageId, hasAccessToken: !!pageAccessToken }],
+      details: [
+        {
+          step: "validate",
+          hasPageId: !!pageId,
+          hasAccessToken: !!pageAccessToken,
+        },
+      ],
     });
   }
 
+  /**
+   * Validate that a video URL is provided.
+   */
   if (!videoUrl) {
     throwAppError({
       message: "No video provided for Facebook",
@@ -273,13 +285,24 @@ export async function publishFacebookVideoPost(opts: {
     });
   }
 
+  /**
+   * Context object used for debugging and error reporting.
+   * Helps track which page and video caused the issue.
+   */
   const ctxBase = {
     provider: "facebook",
     pageId,
-    videoUrlHint: safeUrlHint(videoUrl),
+    videoUrlHint: safeUrlHint(videoUrl), // avoid logging full URL for security
   };
 
   try {
+    /**
+     * Send request to Facebook Graph API to create a video post.
+     *
+     * - file_url: remote video URL (Facebook will fetch it)
+     * - description: post caption/message
+     * - access_token: page access token
+     */
     const resp = await axios.post(
       `https://graph.facebook.com/v24.0/${pageId}/videos`,
       null,
@@ -290,11 +313,18 @@ export async function publishFacebookVideoPost(opts: {
           access_token: pageAccessToken,
         },
         timeout: 60_000,
-        validateStatus: (s) => s >= 200 && s < 300,
+        validateStatus: (s) => s >= 200 && s < 300, // treat only 2xx as success
       }
     );
 
+    /**
+     * Facebook should return a video ID on success.
+     */
     const videoId = resp.data?.id;
+
+    /**
+     * If no video ID is returned, treat it as an invalid response.
+     */
     if (!videoId) {
       throwAppError({
         message: "Facebook returned an invalid video creation response",
@@ -310,13 +340,30 @@ export async function publishFacebookVideoPost(opts: {
       });
     }
 
+    /**
+     * Return the created video ID so it can be stored in publish results.
+     */
     return { videoId };
+
   } catch (e: any) {
+    /**
+     * If this is already a structured AppError, just rethrow it.
+     */
     if (e instanceof AppError) throw e;
 
+    /**
+     * Normalize Facebook / Axios error into a consistent format.
+     */
     const { status, fb, message: fbMsg, raw } = fbErrorFromAxios(e);
+
     const httpStatus = status ?? 502;
 
+    /**
+     * Wrap the error into a standardized AppError.
+     *
+     * - retryable: true if it's a temporary issue (5xx, rate limits, etc.)
+     * - fbError: parsed Facebook error object
+     */
     throwAppError({
       message: "Failed to publish Facebook video",
       status: isRetryableStatus(httpStatus) ? 502 : 400,
