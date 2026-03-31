@@ -4,7 +4,7 @@ import {
 } from "../../../services/metaPublish/facebookPublish";
 import { Platform } from "../../../types/type";
 import AppError from "../../../utils/AppError";
-import { getProviderError } from "../../../utils/publishError";
+import { failPlatform, getErrorMessage } from "../post.helper";
 
 /**
  * Extract video URL safely from media object
@@ -137,23 +137,20 @@ export async function publishFacebookIfNeeded(args: {
 
     return;
   } catch (e: any) {
-    const { message: providerMsg, details } = getProviderError(
-      e,
-      "Facebook publish failed"
-    );
+  const providerMsg = getErrorMessage(e, "Facebook publish failed");
+  failPlatform(post, "facebook", providerMsg);
 
-    post.publishResults.facebook = {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    };
-
-    throw new AppError(
-      providerMsg,
-      502,
-      [{ platform: "facebook", mediaKind: media?.kind, ...details }],
-      "FACEBOOK_PUBLISH_FAILED"
-    );
-  }
+  throw new AppError(
+    providerMsg,
+    502,
+    [
+      {
+        platform: "facebook",
+        mediaKind: media?.kind,
+        providerStatus: e?.response?.status,
+      },
+    ],
+    "FACEBOOK_PUBLISH_FAILED"
+  );
+}
 }

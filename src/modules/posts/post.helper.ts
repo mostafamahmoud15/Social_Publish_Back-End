@@ -249,3 +249,33 @@ export function getInstagramSafeUrls(media: any): string[] {
     })
     .filter(Boolean) as string[];
 }
+
+
+
+export function failPlatform(post: any, platform: Platform, error: string) {
+  setPlatformResult(post, platform, {
+    status: "failed",
+    externalId: null,
+    error,
+    publishedAt: null,
+  });
+}
+
+export function succeedPlatform(post: any, platform: Platform, externalId: string) {
+  setPlatformResult(post, platform, {
+    status: "published",
+    externalId,
+    error: null,
+    publishedAt: new Date(),
+  });
+}
+
+
+export function getErrorMessage(e: any, fallback: string) {
+  return (
+    e?.response?.data?.error?.message ||
+    e?.response?.data?.message ||
+    e?.message ||
+    fallback
+  );
+}

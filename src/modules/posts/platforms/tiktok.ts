@@ -1,7 +1,8 @@
 import { publishTikTokVideo } from "../../../services/tiktokPublish/tiktokPublish";
 import { Platform } from "../../../types/type";
 import AppError from "../../../utils/AppError";
-import { getProviderError } from "../../../utils/publishError";
+import { failPlatform, getErrorMessage } from "../post.helper";
+
 
 /**
  * Publish to TikTok only when:
@@ -90,29 +91,24 @@ export async function publishTikTokIfNeeded(args: {
       publishedAt: new Date(),
     };
   } catch (e: any) {
-    /**
-     * Normalize provider error for consistent handling
-     */
-    const { message: providerMsg, details } = getProviderError(
-      e,
-      "Tiktok publish failed"
-    );
+  /**
+   * Normalize error message (simple + clean)
+   */
+  const error = getErrorMessage(e, "TikTok publish failed");
 
-    post.publishResults.tiktok = {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    };
+  /**
+   * Set platform result using helper (DRY)
+   */
+  failPlatform(post, "tiktok", error);
 
-    /**
-     * Re-throw as AppError for higher-level handling/logging
-     */
-    throw new AppError(
-      providerMsg,
-      502,
-      [{ platform: "tiktok", ...details }],
-      "Tiktok_PUBLISH_FAILED"
-    );
-  }
+  /**
+   * Re-throw as AppError for higher-level handling/logging
+   */
+  throw new AppError(
+    error,
+    502,
+    [{ platform: "tiktok" }],
+    "TIKTOK_PUBLISH_FAILED"
+  );
+}
 }

@@ -1,12 +1,17 @@
 import { Platform } from "../../types/type";
-import { getProviderError } from "../../utils/publishError";
-import { setPlatformResult } from "./post.helper";
+import { failPlatform, getErrorMessage, succeedPlatform } from "./post.helper";
 import { getImageUrls } from "./post.publish.utils";
-
 import { publishFacebookMultiPhotoPost, publishFacebookVideoPost } from "../../services/metaPublish/facebookPublish";
 import { publishInstagramImages, publishInstagramVideo } from "../../services/metaPublish/instagramPublish";
 import { publishTikTokVideo } from "../../services/tiktokPublish/tiktokPublish";
 import { publishYouTubeVideo } from "../../services/youtubePublish/youtubePublish";
+
+
+
+
+
+
+
 
 /**
  * =========================
@@ -34,12 +39,7 @@ async function publishFacebook(params: {
       const imageUrls = getImageUrls(media);
 
       if (!imageUrls.length) {
-        setPlatformResult(post, "facebook", {
-          status: "failed",
-          externalId: null,
-          error: "No images provided for Facebook",
-          publishedAt: null,
-        });
+        failPlatform(post, "facebook", "No images provided for Facebook");
         return;
       }
 
@@ -50,13 +50,7 @@ async function publishFacebook(params: {
         imageUrls,
       });
 
-      setPlatformResult(post, "facebook", {
-        status: "published",
-        externalId: result.postId,
-        error: null,
-        publishedAt: new Date(),
-      });
-
+      succeedPlatform(post, "facebook", result.postId);
       return;
     }
 
@@ -67,12 +61,7 @@ async function publishFacebook(params: {
       const videoUrl = media?.video?.url;
 
       if (!videoUrl) {
-        setPlatformResult(post, "facebook", {
-          status: "failed",
-          externalId: null,
-          error: "Video url is missing",
-          publishedAt: null,
-        });
+        failPlatform(post, "facebook", "Video url is missing");
         return;
       }
 
@@ -83,37 +72,17 @@ async function publishFacebook(params: {
         videoUrl,
       });
 
-      setPlatformResult(post, "facebook", {
-        status: "published",
-        externalId: result.videoId,
-        error: null,
-        publishedAt: new Date(),
-      });
-
+      succeedPlatform(post, "facebook", result.videoId);
       return;
     }
 
     /**
      * Unsupported media type
      */
-    setPlatformResult(post, "facebook", {
-      status: "failed",
-      externalId: null,
-      error: `Unsupported media kind: ${media?.kind}`,
-      publishedAt: null,
-    });
+    failPlatform(post, "facebook", `Unsupported media kind: ${media?.kind}`);
   } catch (e: any) {
-    const { message: providerMsg } = getProviderError(
-      e,
-      "Facebook publish failed"
-    );
-
-    setPlatformResult(post, "facebook", {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    });
+    const providerMsg = getErrorMessage(e, "Facebook publish failed");
+    failPlatform(post, "facebook", providerMsg);
   }
 }
 
@@ -130,6 +99,7 @@ async function publishInstagram(params: {
 }) {
   const { post, byPlatform, message, media } = params;
 
+  // Skip if Instagram is not selected
   if (!byPlatform.has("instagram")) return;
 
   try {
@@ -142,12 +112,7 @@ async function publishInstagram(params: {
       const imageUrls = getImageUrls(media);
 
       if (!imageUrls.length) {
-        setPlatformResult(post, "instagram", {
-          status: "failed",
-          externalId: null,
-          error: "No images provided for Instagram",
-          publishedAt: null,
-        });
+        failPlatform(post, "instagram", "No images provided for Instagram");
         return;
       }
 
@@ -158,13 +123,7 @@ async function publishInstagram(params: {
         imageUrls,
       });
 
-      setPlatformResult(post, "instagram", {
-        status: "published",
-        externalId: result.mediaId,
-        error: null,
-        publishedAt: new Date(),
-      });
-
+      succeedPlatform(post, "instagram", result.mediaId);
       return;
     }
 
@@ -175,12 +134,7 @@ async function publishInstagram(params: {
       const videoUrl = media?.video?.url;
 
       if (!videoUrl) {
-        setPlatformResult(post, "instagram", {
-          status: "failed",
-          externalId: null,
-          error: "Video url is missing",
-          publishedAt: null,
-        });
+        failPlatform(post, "instagram", "Video url is missing");
         return;
       }
 
@@ -192,34 +146,17 @@ async function publishInstagram(params: {
         shareToFeed: true,
       });
 
-      setPlatformResult(post, "instagram", {
-        status: "published",
-        externalId: result.mediaId,
-        error: null,
-        publishedAt: new Date(),
-      });
-
+      succeedPlatform(post, "instagram", result.mediaId);
       return;
     }
 
-    setPlatformResult(post, "instagram", {
-      status: "failed",
-      externalId: null,
-      error: `Unsupported media kind: ${media?.kind}`,
-      publishedAt: null,
-    });
+    /**
+     * Unsupported media type
+     */
+    failPlatform(post, "instagram", `Unsupported media kind: ${media?.kind}`);
   } catch (e: any) {
-    const { message: providerMsg } = getProviderError(
-      e,
-      "Instagram publish failed"
-    );
-
-    setPlatformResult(post, "instagram", {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    });
+    const error = getErrorMessage(e, "Instagram publish failed");
+    failPlatform(post, "instagram", error);
   }
 }
 
@@ -237,22 +174,20 @@ async function publishTikTok(params: {
 }) {
   const { post, byPlatform, message, media, tiktokSettings } = params;
 
-  // TikTok supports only video
+  // Skip if TikTok is not selected or media is not a video
   if (media.kind !== "video" || !byPlatform.has("tiktok")) return;
 
   const videoUrl = media?.video?.url;
 
-  // Retry should default to public if no settings were provided
-  const privacyLevel =
-    tiktokSettings?.privacy_level || "PUBLIC_TO_EVERYONE";
+  // Backend defaults:
+  // If no settings are provided, publish publicly by default.
+  const privacyLevel = tiktokSettings?.privacy_level ?? "PUBLIC_TO_EVERYONE";
+  const disableComment = tiktokSettings?.disable_comment ?? false;
+  const disableDuet = tiktokSettings?.disable_duet ?? false;
+  const disableStitch = tiktokSettings?.disable_stitch ?? false;
 
   if (!videoUrl) {
-    setPlatformResult(post, "tiktok", {
-      status: "failed",
-      externalId: null,
-      error: "Video url is missing",
-      publishedAt: null,
-    });
+    failPlatform(post, "tiktok", "Video url is missing");
     return;
   }
 
@@ -264,27 +199,16 @@ async function publishTikTok(params: {
       videoUrl,
       caption: message,
       privacy_level: privacyLevel,
-      disable_comment: Boolean(tiktokSettings?.disable_comment),
-      disable_duet: Boolean(tiktokSettings?.disable_duet),
-      disable_stitch: Boolean(tiktokSettings?.disable_stitch),
+      disable_comment: disableComment,
+      disable_duet: disableDuet,
+      disable_stitch: disableStitch,
       forcePrivate: false,
     });
 
-    setPlatformResult(post, "tiktok", {
-      status: "published",
-      externalId: result.publish_id,
-      error: null,
-      publishedAt: new Date(),
-    });
+    succeedPlatform(post, "tiktok", result.publish_id);
   } catch (e: any) {
-    const { message: providerMsg } = getProviderError(e, "TikTok publish failed");
-
-    setPlatformResult(post, "tiktok", {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    });
+    const error = getErrorMessage(e, "TikTok publish failed");
+    failPlatform(post, "tiktok", error);
   }
 }
 
@@ -293,6 +217,7 @@ async function publishTikTok(params: {
  * YouTube Publishing Logic
  * =========================
  */
+
 async function publishYouTube(params: {
   post: any;
   byPlatform: Map<Platform, any>;
@@ -302,17 +227,13 @@ async function publishYouTube(params: {
 }) {
   const { post, byPlatform, media, youtubeSettings } = params;
 
+  // Skip if not applicable
   if (media.kind !== "video" || !byPlatform.has("youtube")) return;
 
   const videoUrl = media?.video?.url;
 
   if (!videoUrl) {
-    setPlatformResult(post, "youtube", {
-      status: "failed",
-      externalId: null,
-      error: "Video url is missing",
-      publishedAt: null,
-    });
+    failPlatform(post, "youtube", "Video url is missing");
     return;
   }
 
@@ -320,41 +241,47 @@ async function publishYouTube(params: {
     const acc: any = byPlatform.get("youtube");
 
     if (!acc?.accessToken) {
-      setPlatformResult(post, "youtube", {
-        status: "failed",
-        externalId: null,
-        error: "YouTube access token missing",
-        publishedAt: null,
-      });
+      failPlatform(post, "youtube", "YouTube access token missing");
       return;
     }
+
+    /**
+     * Build hashtags-only description
+     */
+    const hashtagsOnly = Array.isArray(post.hashtags)
+      ? post.hashtags
+        .map((tag: string) => (tag.startsWith("#") ? tag : `#${tag}`))
+        .join(" ")
+      : "";
+
+    /**
+     * Title = caption only (or fallback)
+     */
+    const title =
+      youtubeSettings?.title?.trim() ||
+      String(post.caption || "").trim().slice(0, 100) ||
+      "Untitled video";
 
     const result = await publishYouTubeVideo({
       accessToken: acc.accessToken,
       refreshToken: acc.meta?.refreshToken,
       videoUrl,
-      title:
-        youtubeSettings?.title ||
-        String(post.caption || "").slice(0, 100) ||
-        "Untitled video",
+      title,
+      description: hashtagsOnly,
       privacyStatus: "public",
     });
 
-    setPlatformResult(post, "youtube", {
-      status: "published",
-      externalId: result.videoId,
-      error: null,
-      publishedAt: new Date(),
-    });
-  } catch (e: any) {
-    const { message: providerMsg } = getProviderError(e, "YouTube publish failed");
 
-    setPlatformResult(post, "youtube", {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    });
+    if (!result?.videoId) {
+      failPlatform(post, "youtube", "YouTube did not return a valid video id");
+      return;
+    }
+
+    succeedPlatform(post, "youtube", result.videoId);
+
+  } catch (e: any) {
+    const error = getErrorMessage(e, "YouTube publish failed");
+    failPlatform(post, "youtube", error);
   }
 }
 

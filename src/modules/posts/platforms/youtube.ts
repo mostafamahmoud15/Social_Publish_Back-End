@@ -1,5 +1,5 @@
 import { publishYouTubeVideo } from "../../../services/youtubePublish/youtubePublish";
-import { setPlatformResult } from "../post.helper";
+import { failPlatform, getErrorMessage, succeedPlatform } from "../post.helper";
 
 type Params = {
   post: any;
@@ -23,10 +23,7 @@ export const publishYouTubeIfNeeded = async ({
   youtubeSettings,
 }: Params) => {
   /**
-   * Skip YouTube publishing if:
-   * - YouTube was not selected
-   * - media is not a video
-   * - no active YouTube account is connected
+   * Skip if YouTube is not applicable
    */
   if (!targets?.youtube) return;
   if (media?.kind !== "video") return;
@@ -36,58 +33,51 @@ export const publishYouTubeIfNeeded = async ({
     const ytAcc: any = byPlatform.get("youtube");
 
     /**
-     * Validate that the connected YouTube account
-     * has a usable access token.
+     * Validate access token
      */
     if (!ytAcc?.accessToken) {
-      setPlatformResult(post, "youtube", {
-        status: "failed",
-        externalId: null,
-        error: "YouTube access token missing",
-        publishedAt: null,
-      });
+      failPlatform(post, "youtube", "YouTube access token missing");
       return;
     }
 
     /**
-     * Publish video to YouTube.
-     *
-     * Fallback strategy:
-     * - title: explicit title -> post caption -> default label
-     * - description: explicit description -> built message
-     * - privacyStatus: explicit setting -> PUBLIC by default
+     * Build hashtags-only description
      */
+    const hashtagsOnly = Array.isArray(post.hashtags)
+      ? post.hashtags
+          .map((tag: string) => (tag.startsWith("#") ? tag : `#${tag}`))
+          .join(" ")
+      : "";
+
+    /**
+     * Title = caption only
+     */
+    const title =
+      youtubeSettings?.title?.trim() ||
+      String(post.caption || "").trim().slice(0, 100) ||
+      "Untitled video";
+
     const result = await publishYouTubeVideo({
       accessToken: ytAcc.accessToken,
       refreshToken: ytAcc.meta?.refreshToken,
       tokenExpiresAt: ytAcc.tokenExpiresAt,
       videoUrl: media.video.url,
-      title: youtubeSettings?.title || post.caption || "Untitled video",
-      description: youtubeSettings?.description || message || "",
-      privacyStatus: youtubeSettings?.privacyStatus || "public",
+      title,
+      description: hashtagsOnly,
+      privacyStatus: "public",
     });
 
     /**
-     * Mark platform result as published on success.
+     * Validate response before success
      */
-    setPlatformResult(post, "youtube", {
-      status: "published",
-      externalId: result.videoId,
-      error: null,
-      publishedAt: new Date(),
-    });
+    if (!result?.videoId) {
+      failPlatform(post, "youtube", "YouTube did not return a valid video id");
+      return;
+    }
+
+    succeedPlatform(post, "youtube", result.videoId);
   } catch (e: any) {
-    /**
-     * Store the most useful available error message.
-     */
-    setPlatformResult(post, "youtube", {
-      status: "failed",
-      externalId: null,
-      error:
-        e?.response?.data?.error?.message ||
-        e?.message ||
-        "YouTube publish failed",
-      publishedAt: null,
-    });
+    const error = getErrorMessage(e, "YouTube publish failed");
+    failPlatform(post, "youtube", error);
   }
 };

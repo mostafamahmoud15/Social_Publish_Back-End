@@ -54,37 +54,7 @@ const mediaSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-/**
- * TikTok settings are only needed when publishing to TikTok.
- */
-const tiktokSettingsSchema = z
-  .object({
-    privacy_level: z.string().min(1, "privacy_level is required"),
-    disable_comment: z.boolean().optional(),
-    disable_duet: z.boolean().optional(),
-    disable_stitch: z.boolean().optional(),
-  })
-  .optional();
 
-/**
- * YouTube settings are only needed when publishing to YouTube.
- */
-const youtubeSettingsSchema = z
-  .object({
-    title: z
-      .string()
-      .trim()
-      .min(1, "title is required")
-      .max(100, "title must be at most 100 characters")
-      .optional(),
-    description: z
-      .string()
-      .trim()
-      .max(5000, "description is too long")
-      .optional(),
-    privacyStatus: z.enum(["private", "public", "unlisted"]).optional(),
-  })
-  .optional();
 
 /**
  * Create post request schema.
@@ -96,8 +66,6 @@ export const createPostSchema = z
     hashtags: z.array(z.string().min(1)).optional().default([]),
     targets: targetsSchema,
     media: mediaSchema,
-    tiktokSettings: tiktokSettingsSchema,
-    youtubeSettings: youtubeSettingsSchema,
   })
   .superRefine((val, ctx) => {
     const targets = val.targets || {};
@@ -136,26 +104,6 @@ export const createPostSchema = z
       }
     }
 
-    // Video rules
-    if (val.media.kind === "video") {
-      // TikTok selected -> privacy_level must exist
-      if (targets.tiktok === true && !val.tiktokSettings?.privacy_level) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["tiktokSettings", "privacy_level"],
-          message: "privacy_level is required when publishing to TikTok",
-        });
-      }
-
-      // YouTube selected -> title must exist
-      if (targets.youtube === true && !val.youtubeSettings?.title?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["youtubeSettings", "title"],
-          message: "title is required when publishing to YouTube",
-        });
-      }
-    }
   });
 
 /**

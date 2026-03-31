@@ -4,7 +4,8 @@ import {
 } from "../../../services/metaPublish/instagramPublish";
 import { Platform } from "../../../types/type";
 import AppError from "../../../utils/AppError";
-import { getProviderError } from "../../../utils/publishError";
+import { failPlatform, getErrorMessage } from "../post.helper";
+
 
 /**
  * Extract video URL safely from media object
@@ -142,22 +143,13 @@ export async function publishInstagramIfNeeded(args: {
 
     return;
   } catch (e: any) {
-    const { message: providerMsg, details } = getProviderError(
-      e,
-      "Instagram publish failed"
-    );
-
-    post.publishResults.instagram = {
-      status: "failed",
-      externalId: null,
-      error: providerMsg,
-      publishedAt: null,
-    };
+    const error = getErrorMessage(e, "Instagram publish failed");
+    failPlatform(post, "instagram", error);
 
     throw new AppError(
-      providerMsg,
+      error,
       502,
-      [{ platform: "instagram", mediaKind: media?.kind, ...details }],
+      [{ platform: "instagram", mediaKind: media?.kind }],
       "INSTAGRAM_PUBLISH_FAILED"
     );
   }
