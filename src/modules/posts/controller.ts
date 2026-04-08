@@ -6,10 +6,12 @@ import { sendSuccess } from "../../utils/response";
 import { ApiFeatures } from "../../utils/ApiFeatures";
 
 
+
 import {
   publishPost,
   retryPostPublishing,
 } from "./post.publish.service";
+import { deletePostMediaFromCloudinary } from "../../utils/DeleteFromCloudinary";
 
 export const createPost = async (
   req: AuthenticatedRequest,
@@ -199,25 +201,46 @@ export const getAllPosts = async (
  * Deletes a post from the database.
  */
 
+
+
 export const deletePost = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
+  try {
+    const postId = req.params.id;
 
-  const postId = req.params.id;
+    const post = await Post.findById(postId);
 
-  const post = await Post.findByIdAndDelete(postId);
+    if (!post) {
+      return next(new AppError("Post not found", 404));
+    }
 
-  if (!post) {
-    return next(new AppError("Post not found", 404));
+    /**
+     * Optional but recommended:
+     * if the post belongs to a user, make sure the current user owns it
+     */
+    if (String(post.user) !== String(req.user?._id)) {
+      return next(new AppError("You are not allowed to delete this post", 403));
+    }
+
+    /**
+     * 1) Delete Cloudinary assets first
+     * 2) Then delete post from database
+     */
+    await deletePostMediaFromCloudinary(post.media);
+
+    await Post.findByIdAndDelete(postId);
+
+    return sendSuccess(
+      req,
+      res,
+      { id: postId },
+      200,
+      "Post deleted successfully"
+    );
+  } catch (error) {
+    return next(error);
   }
-
-  return sendSuccess(
-    req,
-    res,
-    { post },
-    200,
-    "Post deleted successfully"
-  );
 };
