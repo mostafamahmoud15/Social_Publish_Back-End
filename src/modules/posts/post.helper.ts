@@ -96,7 +96,7 @@ export function markIncompatiblePlatforms(
 
     // Skip platforms that are compatible
     // - Facebook/Instagram: images only
-    // - TikTok: video only
+    // - TikTok/YouTube: video only
     if (isPlatformCompatible(p, mediaKind)) continue;
 
     post.publishResults[p] = {

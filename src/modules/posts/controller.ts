@@ -63,7 +63,6 @@ export const retryPublishPost = async (
     requesterRole: String(user.role || ""),
     onlyPlatform: platform,
 
-    // Force retry defaults for TikTok
     tiktokSettings: {
       privacy_level: "PUBLIC_TO_EVERYONE",
       disable_comment: false,
@@ -71,7 +70,6 @@ export const retryPublishPost = async (
       disable_stitch: false,
     },
 
-    // Force retry defaults for YouTube
     youtubeSettings: {
       privacyStatus: "public",
     },
@@ -207,7 +205,7 @@ export const deletePost = async (
   next: NextFunction
 ) => {
 
-  const  postId  = req.params.id;
+  const postId = req.params.id;
 
   const post = await Post.findByIdAndDelete(postId);
 

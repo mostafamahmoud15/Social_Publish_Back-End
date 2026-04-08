@@ -82,6 +82,7 @@ export async function publishPost(
     media,
   });
 
+  // create publish results
   ensurePublishResults(post);
 
   /**
@@ -94,7 +95,7 @@ export async function publishPost(
   /**
    * Extract selected platforms
    */
-  const selected = getSelectedPlatforms(targets);
+  const selected = getSelectedPlatforms(targets);   // return platform names  --    [ "facebook", "tiktok" ]
 
   if (selected.length === 0) {
     post.status = "queued";
@@ -254,132 +255,118 @@ export async function retryPostPublishing(
 
   const post: any = locked;
 
-  try {
-    ensurePublishResults(post);
-    ensureValidMedia(post.media);
+  ensurePublishResults(post);
+  ensureValidMedia(post.media);
 
-    const media = post.media;
-    const targets = post.targets || {};
+  const media = post.media;
+  const targets = post.targets || {};
 
-    /**
-     * Optional: retry only a specific platform
-     */
-    const hasRequestedPlatform =
-      onlyPlatform !== undefined &&
-      onlyPlatform !== null &&
-      String(onlyPlatform).trim() !== "";
+  /**
+   * Optional: retry only a specific platform
+   */
+  const hasRequestedPlatform =
+    onlyPlatform !== undefined &&
+    onlyPlatform !== null &&
+    String(onlyPlatform).trim() !== "";
 
-    const requestedPlatform = parsePlatform(onlyPlatform);
+  const requestedPlatform = parsePlatform(onlyPlatform);
 
-    if (hasRequestedPlatform && !requestedPlatform) {
-      throw new AppError("Invalid platform value", 400);
-    }
-
-    /**
-     * Get originally selected platforms
-     */
-    const targeted = ALL_PLATFORMS.filter((p) => targets?.[p] === true);
-
-    if (targeted.length === 0) {
-      return await saveFinalized(post, "No platforms selected for this post.");
-    }
-
-    /**
-     * Validate requested platform is part of the original targets
-     */
-    if (requestedPlatform && !targeted.includes(requestedPlatform)) {
-      return await saveFinalized(
-        post,
-        `Platform "${requestedPlatform}" was not selected for this post.`
-      );
-    }
-
-    /**
-     * Build retry candidates:
-     * - compatible with media
-     * - failed / retryable
-     */
-    let candidates = targeted
-      .filter((p) => isPlatformCompatible(p, media.kind))
-      .filter((p) => shouldRetryPlatform(post, p));
-
-    if (requestedPlatform) {
-      candidates = candidates.filter((p) => p === requestedPlatform);
-    }
-
-    if (candidates.length === 0) {
-      return await saveFinalized(
-        post,
-        requestedPlatform
-          ? `Nothing to retry for platform "${requestedPlatform}".`
-          : "Nothing to retry for the selected platform(s)."
-      );
-    }
-
-    /**
-     * Load active accounts for retry
-     */
-    const byPlatform = await loadActiveAccounts(String(post.user), candidates);
-
-    /**
-     * Reset platform results before retry
-     */
-    for (const p of candidates) {
-      setPlatformResult(post, p, {
-        status: byPlatform.has(p) ? "idle" : "failed",
-        externalId: null,
-        error: byPlatform.has(p) ? null : "Platform not connected/active",
-        publishedAt: null,
-      });
-    }
-
-    /**
-     * Only retry platforms that are actually connected
-     */
-    const runnable = candidates.filter((p) => byPlatform.has(p));
-
-    if (runnable.length === 0) {
-      return await saveFinalized(
-        post,
-        requestedPlatform
-          ? `No active connected account for platform "${requestedPlatform}".`
-          : "No active connected accounts for retry platforms."
-      );
-    }
-
-    /**
-     * Build message again from caption + hashtags
-     */
-    const message = buildMessage(
-      String(post.caption || ""),
-      asStringArray(post.hashtags || [])
-    );
-
-    /**
-     * Execute retry publishing
-     */
-    await executePublishing({
-      post,
-      platforms: runnable,
-      byPlatform,
-      media,
-      message,
-      tiktokSettings,
-      youtubeSettings,
-    });
-
-    return await saveFinalized(post);
-  } finally {
-    /**
-     * Safety fallback:
-     * Ensure post is finalized even if something fails mid-flow
-     */
-    if (post.status === "publishing") {
-      try {
-        const fin = finalizeStatus(post);
-        post.status = fin.status;
-        await post.save();
-      } catch {}
-    }
+  if (hasRequestedPlatform && !requestedPlatform) {
+    throw new AppError("Invalid platform value", 400);
   }
+
+  /**
+   * Get originally selected platforms
+   */
+  const targeted = ALL_PLATFORMS.filter((p) => targets?.[p] === true);
+
+  if (targeted.length === 0) {
+    return await saveFinalized(post, "No platforms selected for this post.");
+  }
+
+  /**
+   * Validate requested platform is part of the original targets
+   */
+  if (requestedPlatform && !targeted.includes(requestedPlatform)) {
+    return await saveFinalized(
+      post,
+      `Platform "${requestedPlatform}" was not selected for this post.`
+    );
+  }
+
+  /**
+   * Build retry candidates:
+   * - compatible with media
+   * - failed / retryable
+   */
+  let candidates = targeted
+    .filter((p) => isPlatformCompatible(p, media.kind))
+    .filter((p) => shouldRetryPlatform(post, p));
+
+  if (requestedPlatform) {
+    candidates = candidates.filter((p) => p === requestedPlatform);
+  }
+
+  if (candidates.length === 0) {
+    return await saveFinalized(
+      post,
+      requestedPlatform
+        ? `Nothing to retry for platform "${requestedPlatform}".`
+        : "Nothing to retry for the selected platform(s)."
+    );
+  }
+
+  /**
+   * Load active accounts for retry
+   */
+  const byPlatform = await loadActiveAccounts(String(post.user), candidates);
+
+  /**
+   * Reset platform results before retry
+   */
+  for (const p of candidates) {
+    setPlatformResult(post, p, {
+      status: byPlatform.has(p) ? "idle" : "failed",
+      externalId: null,
+      error: byPlatform.has(p) ? null : "Platform not connected/active",
+      publishedAt: null,
+    });
+  }
+
+  /**
+   * Only retry platforms that are actually connected
+   */
+  const runnable = candidates.filter((p) => byPlatform.has(p));
+
+  if (runnable.length === 0) {
+    return await saveFinalized(
+      post,
+      requestedPlatform
+        ? `No active connected account for platform "${requestedPlatform}".`
+        : "No active connected accounts for retry platforms."
+    );
+  }
+
+  /**
+   * Build message again from caption + hashtags
+   */
+  const message = buildMessage(
+    String(post.caption || ""),
+    asStringArray(post.hashtags || [])
+  );
+
+  /**
+   * Execute retry publishing
+   */
+  await executePublishing({
+    post,
+    platforms: runnable,
+    byPlatform,
+    media,
+    message,
+    tiktokSettings,
+    youtubeSettings,
+  });
+
+  return await saveFinalized(post);
 }
