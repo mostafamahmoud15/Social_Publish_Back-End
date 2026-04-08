@@ -208,7 +208,6 @@ export const deletePost = async (
   res: Response,
   next: NextFunction
 ) => {
-  try {
     const postId = req.params.id;
 
     const post = await Post.findById(postId);
@@ -240,7 +239,4 @@ export const deletePost = async (
       200,
       "Post deleted successfully"
     );
-  } catch (error) {
-    return next(error);
-  }
 };
