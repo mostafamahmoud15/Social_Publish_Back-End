@@ -181,7 +181,7 @@ async function publishTikTok(params: {
 
   // Backend defaults:
   // If no settings are provided, publish publicly by default.
-  const privacyLevel = tiktokSettings?.privacy_level ?? "PUBLIC_TO_EVERYONE";
+  const privacyLevel = tiktokSettings?.privacy_level ?? "SELF_ONLY";
   const disableComment = tiktokSettings?.disable_comment ?? false;
   const disableDuet = tiktokSettings?.disable_duet ?? false;
   const disableStitch = tiktokSettings?.disable_stitch ?? false;

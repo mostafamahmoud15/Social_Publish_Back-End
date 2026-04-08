@@ -64,7 +64,7 @@ export const retryPublishPost = async (
     onlyPlatform: platform,
 
     tiktokSettings: {
-      privacy_level: "PUBLIC_TO_EVERYONE",
+      privacy_level: "SELF_ONLY",
       disable_comment: false,
       disable_duet: false,
       disable_stitch: false,
