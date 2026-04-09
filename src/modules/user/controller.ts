@@ -6,6 +6,8 @@ import { sendSuccess } from "../../utils/response";
 import { AuthenticatedRequest } from "../../types/express";
 import { ApiFeatures } from "../../utils/ApiFeatures";
 import { deleteUserPosts } from "../../utils/DeleteUserPosts";
+import OAuthState from "../integrations/OAuth";
+import { ConnectedAccount } from "../integrations/ConnectedAccount";
 
 /**
  * Maps database user document to API-safe response object.
@@ -86,33 +88,45 @@ export const createUser = async (req: AuthenticatedRequest, res: Response, next:
  * - Otherwise delete and return the deleted user.
  */
 
+
 export const deleteUser = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
-  const userId = req.params.id;
+  try {
+    const userId = req.params.id as string;
 
-  // find user first
-  const user = await User.findById(userId);
+    const user = await User.findById(userId);
 
-  if (!user) {
-    return next(new AppError("User not found", 404));
+    if (!user) {
+      return next(new AppError("User not found", 404));
+    }
+
+    const deletedPostsCount = await deleteUserPosts(userId);
+
+    const [connectedAccountsResult, oauthStatesResult] = await Promise.all([
+      ConnectedAccount.deleteMany({ userId }),
+      OAuthState.deleteMany({ userId }),
+    ]);
+
+    await User.findByIdAndDelete(userId);
+
+    return sendSuccess(
+      req,
+      res,
+      {
+        user: userDTO(user),
+        deletedPostsCount,
+        deletedConnectedAccountsCount:
+          connectedAccountsResult.deletedCount ?? 0,
+        deletedOAuthStatesCount:
+          oauthStatesResult.deletedCount ?? 0,
+      },
+      200,
+      "User deleted successfully"
+    );
+  } catch (error) {
+    return next(error);
   }
-
-  // delete all posts that belong to this user (with Cloudinary cleanup)
-  const deletedPostsCount = await deleteUserPosts(req.params.id as string);
-  // delete user
-  await User.findByIdAndDelete(userId);
-
-  return sendSuccess(
-    req,
-    res,
-    {
-      user: userDTO(user),
-      deletedPostsCount,
-    },
-    200,
-    "User deleted successfully"
-  );
 };
