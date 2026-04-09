@@ -225,6 +225,7 @@ export async function publishTikTokVideo({
         }
       );
     }
+    
 
     const uploadUrl = initBody?.data?.upload_url;
     const publishId = initBody?.data?.publish_id;
