@@ -180,7 +180,7 @@ export async function publishTikTokVideo({
      */
     const privacy = forcePrivate
       ? "SELF_ONLY"
-      : (privacy_level ?? "PUBLIC_TO_EVERYONE");
+      : (privacy_level ?? "SELF_ONLY");
 
     /**
      * Step 3: Initialize TikTok upload session
