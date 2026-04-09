@@ -5,6 +5,7 @@ import AppError from "../../utils/AppError";
 import { sendSuccess } from "../../utils/response";
 import { AuthenticatedRequest } from "../../types/express";
 import { ApiFeatures } from "../../utils/ApiFeatures";
+import { deleteUserPosts } from "../../utils/DeleteUserPosts";
 
 /**
  * Maps database user document to API-safe response object.
@@ -59,12 +60,12 @@ export const createUser = async (req: AuthenticatedRequest, res: Response, next:
 
 
 
- // Create the user (override email with normalized value)
+  // Create the user (override email with normalized value)
   const newUser = new User(req.body);
 
 
 
-   // Save to database
+  // Save to database
   await newUser.save();
 
 
@@ -84,24 +85,33 @@ export const createUser = async (req: AuthenticatedRequest, res: Response, next:
  * - If the user doesn't exist, return 404.
  * - Otherwise delete and return the deleted user.
  */
+
 export const deleteUser = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
-  // Try to delete the user by ID
-  const user = await User.findByIdAndDelete(req.params.id);
+  const userId = req.params.id;
 
-  // If no user was found, return 404
+  // find user first
+  const user = await User.findById(userId);
+
   if (!user) {
     return next(new AppError("User not found", 404));
   }
 
-  // Return the deleted user (DTO prevents leaking sensitive fields)
+  // delete all posts that belong to this user (with Cloudinary cleanup)
+  const deletedPostsCount = await deleteUserPosts(req.params.id as string);
+  // delete user
+  await User.findByIdAndDelete(userId);
+
   return sendSuccess(
     req,
     res,
-    { user: userDTO(user) },
+    {
+      user: userDTO(user),
+      deletedPostsCount,
+    },
     200,
     "User deleted successfully"
   );
