@@ -8,20 +8,10 @@ import AppError from "../../utils/AppError";
 const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB per chunk
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB max allowed size
 
-type TikTokPrivacyLevel =
-  | "PUBLIC_TO_EVERYONE"
-  | "MUTUAL_FOLLOW_FRIENDS"
-  | "SELF_ONLY";
-
 /**
  * Helper to create a standardized AppError
  */
-function createError(
-  message: string,
-  status: number,
-  code: string,
-  details?: any
-) {
+function createError(message: string, status: number, code: string, details?: any) {
   return new AppError(message, status, details ? [details] : [], code);
 }
 
@@ -29,7 +19,7 @@ function createError(
  * Determine if a request should be retried based on HTTP status
  */
 function shouldRetry(status?: number) {
-  return status === 408 || status === 429 || (!!status && status >= 500);
+  return status === 408 || status === 429 || (status && status >= 500);
 }
 
 /**
@@ -51,9 +41,7 @@ async function parseResponse(res: Response) {
  * Download video from remote URL and store it temporarily
  */
 async function downloadVideo(videoUrl: string) {
-  const fileName = `tiktok_${Date.now()}_${crypto
-    .randomBytes(4)
-    .toString("hex")}.mp4`;
+  const fileName = `tiktok_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.mp4`;
   const filePath = path.join(os.tmpdir(), fileName);
 
   let response;
@@ -81,6 +69,9 @@ async function downloadVideo(videoUrl: string) {
     );
   }
 
+  /**
+   * Stream video into a temp file while checking max size
+   */
   await new Promise<void>((resolve, reject) => {
     const writer = fs.createWriteStream(filePath);
     let total = 0;
@@ -117,6 +108,9 @@ async function downloadVideo(videoUrl: string) {
 
   const stats = fs.statSync(filePath);
 
+  /**
+   * Validate downloaded file is not empty
+   */
   if (!stats.size) {
     fs.unlinkSync(filePath);
 
@@ -134,92 +128,10 @@ async function downloadVideo(videoUrl: string) {
 /**
  * Read a chunk from file using file descriptor
  */
-async function readChunk(
-  fd: fs.promises.FileHandle,
-  start: number,
-  length: number
-) {
+async function readChunk(fd: fs.promises.FileHandle, start: number, length: number) {
   const buffer = Buffer.alloc(length);
   const { bytesRead } = await fd.read(buffer, 0, length, start);
   return buffer.subarray(0, bytesRead);
-}
-
-/**
- * Query creator info before init.
- * TikTok requires using this to determine available privacy options.
- */
-async function queryTikTokCreatorInfo(accessToken: string) {
-  const res = await fetch(
-    "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json; charset=UTF-8",
-      },
-      body: JSON.stringify({}),
-    }
-  );
-
-  const body: any = await parseResponse(res);
-
-  if (!res.ok || body?.error?.code !== "ok") {
-    throw createError(
-      "TikTok creator info query failed",
-      shouldRetry(res.status) ? 502 : 400,
-      "TIKTOK_CREATOR_INFO_FAILED",
-      {
-        step: "creator_info",
-        httpStatus: res.status,
-        response: body,
-      }
-    );
-  }
-
-  return body?.data ?? {};
-}
-
-/**
- * Pick a valid privacy level from TikTok-provided options.
- */
-function resolveTikTokPrivacy({
-  requestedPrivacy,
-  privacyOptions,
-}: {
-  requestedPrivacy?: TikTokPrivacyLevel;
-  privacyOptions: string[];
-}): TikTokPrivacyLevel {
-  const normalizedOptions = privacyOptions.filter(Boolean) as TikTokPrivacyLevel[];
-
-  if (!normalizedOptions.length) {
-    throw createError(
-      "No privacy options returned by TikTok",
-      400,
-      "TIKTOK_NO_PRIVACY_OPTIONS",
-      {
-        step: "creator_info",
-        privacyOptions,
-      }
-    );
-  }
-
-  if (requestedPrivacy && normalizedOptions.includes(requestedPrivacy)) {
-    return requestedPrivacy;
-  }
-
-  if (normalizedOptions.includes("SELF_ONLY")) {
-    return "SELF_ONLY";
-  }
-
-  if (normalizedOptions.includes("MUTUAL_FOLLOW_FRIENDS")) {
-    return "MUTUAL_FOLLOW_FRIENDS";
-  }
-
-  if (normalizedOptions.includes("PUBLIC_TO_EVERYONE")) {
-    return "PUBLIC_TO_EVERYONE";
-  }
-
-  return normalizedOptions[0];
 }
 
 /**
@@ -238,7 +150,7 @@ export async function publishTikTokVideo({
   accessToken: string;
   videoUrl: string;
   caption: string;
-  privacy_level?: TikTokPrivacyLevel;
+  privacy_level?: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY";
   disable_comment?: boolean;
   disable_duet?: boolean;
   disable_stitch?: boolean;
@@ -249,66 +161,30 @@ export async function publishTikTokVideo({
 
   try {
     /**
-     * Step 1: Query creator info first
-     */
-    const creatorInfo = await queryTikTokCreatorInfo(accessToken);
-
-    const privacyOptions: string[] =
-      creatorInfo?.privacy_level_options ?? [];
-
-    const requestedPrivacy: TikTokPrivacyLevel | undefined = forcePrivate
-      ? "SELF_ONLY"
-      : privacy_level ?? "SELF_ONLY";
-
-    const privacy = resolveTikTokPrivacy({
-      requestedPrivacy,
-      privacyOptions,
-    });
-
-    /**
-     * Optional debug logs
-     */
-    console.log("TikTok creator info", {
-      privacyOptions,
-      requestedPrivacy,
-      chosenPrivacy: privacy,
-      commentDisabled: disable_comment,
-      duetDisabled: disable_duet,
-      stitchDisabled: disable_stitch,
-      maxVideoPostDurationSec: creatorInfo?.max_video_post_duration_sec,
-    });
-
-    /**
-     * Step 2: Download video locally
+     * Step 1: Download video locally
      */
     const { filePath: tempPath, fileSize } = await downloadVideo(videoUrl);
     filePath = tempPath;
 
     /**
-     * Step 3: Calculate chunking strategy
+     * Step 2: Calculate chunking strategy
      */
     const chunkSize = fileSize <= 5 * 1024 * 1024 ? fileSize : CHUNK_SIZE;
     const totalChunks = Math.ceil(fileSize / chunkSize);
 
     /**
-     * Step 4: Initialize TikTok upload session
+     * Privacy handling:
+     * - If forcePrivate = true → override everything to SELF_ONLY
+     * - Otherwise → use provided privacy_level
+     * - Default fallback → PUBLIC
      */
-    const initPayload = {
-      post_info: {
-        title: (caption || "").trim().slice(0, 2200),
-        privacy_level: privacy,
-        disable_comment,
-        disable_duet,
-        disable_stitch,
-      },
-      source_info: {
-        source: "FILE_UPLOAD",
-        video_size: fileSize,
-        chunk_size: chunkSize,
-        total_chunk_count: totalChunks,
-      },
-    };
+    const privacy = forcePrivate
+      ? "SELF_ONLY"
+      : (privacy_level ?? "SELF_ONLY");
 
+    /**
+     * Step 3: Initialize TikTok upload session
+     */
     const initRes = await fetch(
       "https://open.tiktokapis.com/v2/post/publish/video/init/",
       {
@@ -317,7 +193,21 @@ export async function publishTikTokVideo({
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(initPayload),
+        body: JSON.stringify({
+          post_info: {
+            title: (caption || "").trim().slice(0, 2200),
+            privacy_level: privacy,
+            disable_comment,
+            disable_duet,
+            disable_stitch,
+          },
+          source_info: {
+            source: "FILE_UPLOAD",
+            video_size: fileSize,
+            chunk_size: chunkSize,
+            total_chunk_count: totalChunks,
+          },
+        }),
       }
     );
 
@@ -331,12 +221,6 @@ export async function publishTikTokVideo({
         {
           step: "init",
           httpStatus: initRes.status,
-          request: initPayload,
-          creatorInfo: {
-            privacyOptions,
-            chosenPrivacy: privacy,
-            requestedPrivacy,
-          },
           response: initBody,
         }
       );
@@ -358,7 +242,7 @@ export async function publishTikTokVideo({
     }
 
     /**
-     * Step 5: Upload video in chunks
+     * Step 4: Upload video in chunks
      */
     fileHandle = await fs.promises.open(filePath, "r");
 
@@ -403,7 +287,11 @@ export async function publishTikTokVideo({
       }
     }
 
+    /**
+     * Return publish id (used later to track status)
+     */
     return { publish_id: publishId };
+
   } catch (error: any) {
     if (error instanceof AppError) throw error;
 
@@ -413,7 +301,13 @@ export async function publishTikTokVideo({
       "TIKTOK_UNEXPECTED",
       { errorMessage: error?.message }
     );
+
   } finally {
+    /**
+     * Cleanup resources:
+     * - Close file handle
+     * - Delete temp file
+     */
     try {
       if (fileHandle) await fileHandle.close();
     } catch {}
