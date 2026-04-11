@@ -3,10 +3,10 @@ import { z } from "zod";
 
 // Define the user schema
 export const createUserSchema = z.object({
-    username: z.string().min(3),
-    email: z.email(),
-    role: z.enum(["owner", "user"]),
-    password: z.string().regex(/^[!@#$%^&*]{1}[A-Za-z]{3,}[0-9]{2,}[!@#$%^&*]{1}$/),
+  username: z.string().min(3),
+  email: z.email(),
+  role: z.enum(["owner", "user"]),
+  password: z.string().min(6),
 });
 
 
