@@ -664,14 +664,14 @@ export const youtubeCallback = async (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
-    YOUTUBE_FRONTEND_REDIRECT,
+    GOOGLE_FRONTEND_REDIRECT,
   } = process.env;
 
   if (
     !GOOGLE_CLIENT_ID ||
     !GOOGLE_CLIENT_SECRET ||
     !GOOGLE_REDIRECT_URI ||
-    !YOUTUBE_FRONTEND_REDIRECT
+    !GOOGLE_FRONTEND_REDIRECT
   ) {
     return next(new AppError("Google config missing", 500));
   }
@@ -714,7 +714,7 @@ export const youtubeCallback = async (
 
   await session.save();
 
-  return res.redirect(`${YOUTUBE_FRONTEND_REDIRECT}?state=${state}&platform=youtube`);
+  return res.redirect(`${GOOGLE_FRONTEND_REDIRECT}?state=${state}&platform=youtube`);
 
 };
 

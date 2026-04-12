@@ -138,15 +138,12 @@ export const getAllPosts = async (
    * Initialize ApiFeatures utility.
    *
    * This helper applies:
-   * - search
    * - pagination
-   * - additional filters if present
    */
   const features = new ApiFeatures(
     Post.find(baseFilter),
     req.query
   )
-    .search(["caption", "hashtags"])
     .paginate(10, 50);
 
   /**
