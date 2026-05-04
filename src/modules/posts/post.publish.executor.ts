@@ -5,6 +5,7 @@ import { publishFacebookMultiPhotoPost, publishFacebookVideoPost } from "../../s
 import { publishInstagramImages, publishInstagramVideo } from "../../services/metaPublish/instagramPublish";
 import { publishTikTokVideo } from "../../services/tiktokPublish/tiktokPublish";
 import { publishYouTubeVideo } from "../../services/youtubePublish/youtubePublish";
+import { getValidTikTokAccessToken } from "./post.tiktok.token";
 
 
 
@@ -194,8 +195,13 @@ async function publishTikTok(params: {
   try {
     const acc: any = byPlatform.get("tiktok");
 
+    const accessToken = await getValidTikTokAccessToken({
+      userId: String(post.user),
+      accountId: String(acc._id),
+    });
+
     const result = await publishTikTokVideo({
-      accessToken: acc.accessToken,
+      accessToken,
       videoUrl,
       caption: message,
       privacy_level: privacyLevel,
