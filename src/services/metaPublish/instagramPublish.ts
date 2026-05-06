@@ -13,7 +13,7 @@ function normalizeForIg(url: string) {
   if (url.includes("res.cloudinary.com") && url.includes("/upload/")) {
     return url.replace(
       "/upload/",
-      "/upload/w_1080,h_1350,c_pad,b_white,q_auto:best,f_jpg/"
+      "/upload/w_1080,h_1350,c_fill,g_auto,q_auto:best,f_jpg/"
     );
   }
 
