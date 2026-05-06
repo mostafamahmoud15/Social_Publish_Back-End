@@ -3,28 +3,22 @@ import AppError from "../../utils/AppError";
 
 const IG_API = "https://graph.facebook.com/v24.0";
 
-/**
- * Normalize image URLs for Instagram.
- * Example: apply Cloudinary transformations to ensure correct aspect ratio.
- */
 function normalizeForIg(url: string) {
   if (!url) return url;
 
   if (url.includes("res.cloudinary.com") && url.includes("/upload/")) {
     return url.replace(
       "/upload/",
-      "/upload/w_1080,h_1350,c_fill,g_auto,q_auto:best,f_jpg/"
+      "/upload/w_1080,h_1350,c_pad,b_auto,q_auto:best,f_jpg/"
     );
   }
 
   return url;
 }
 
-/**
- * Return a safe version of a URL for logging (no query params, no secrets).
- */
 function safeUrlHint(url?: string) {
   if (!url) return undefined;
+
   try {
     const u = new URL(url);
     return `${u.origin}${u.pathname}`;
@@ -33,9 +27,6 @@ function safeUrlHint(url?: string) {
   }
 }
 
-/**
- * Normalize Facebook/Instagram API errors
- */
 function getFbError(e: any) {
   return {
     status: e?.response?.status,
@@ -49,9 +40,6 @@ function getFbError(e: any) {
   };
 }
 
-/**
- * Helper to throw a structured AppError
- */
 function fail(
   message: string,
   code: string,
@@ -61,16 +49,10 @@ function fail(
   throw new AppError(message, status, [details], code);
 }
 
-/**
- * Sleep helper (used for polling)
- */
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Create an Instagram media container (image, video, or carousel)
- */
 async function createMediaContainer(params: {
   igUserId: string;
   accessToken: string;
@@ -95,9 +77,6 @@ async function createMediaContainer(params: {
   } = params;
 
   try {
-    /**
-     * Call Instagram Graph API to create media container
-     */
     const { data } = await axios.post(`${IG_API}/${igUserId}/media`, null, {
       params: {
         image_url: imageUrl,
@@ -113,9 +92,6 @@ async function createMediaContainer(params: {
       validateStatus: (s) => s >= 200 && s < 300,
     });
 
-    /**
-     * Instagram must return a container ID
-     */
     if (!data?.id) {
       fail("Instagram returned invalid container response", "IG_CONTAINER_INVALID", 502, {
         igUserId,
@@ -142,58 +118,6 @@ async function createMediaContainer(params: {
   }
 }
 
-/**
- * Publish a previously created container
- */
-async function publishContainer(params: {
-  igUserId: string;
-  accessToken: string;
-  creationId: string;
-}) {
-  const { igUserId, accessToken, creationId } = params;
-
-  try {
-    const { data } = await axios.post(
-      `${IG_API}/${igUserId}/media_publish`,
-      null,
-      {
-        params: {
-          creation_id: creationId,
-          access_token: accessToken,
-        },
-        timeout: 30000,
-        validateStatus: (s) => s >= 200 && s < 300,
-      }
-    );
-
-    /**
-     * Must return published media ID
-     */
-    if (!data?.id) {
-      fail("Instagram returned invalid publish response", "IG_PUBLISH_INVALID", 502, {
-        igUserId,
-        creationId,
-        response: data,
-      });
-    }
-
-    return data.id as string;
-  } catch (e: any) {
-    const err = getFbError(e);
-
-    fail("Failed to publish Instagram media", "IG_PUBLISH_FAILED", err.status || 502, {
-      igUserId,
-      creationId,
-      fbError: err.error,
-      errorMessage: err.message,
-      response: err.raw,
-    });
-  }
-}
-
-/**
- * Wait until Instagram finishes processing media (required for videos/reels)
- */
 async function waitUntilReady(params: {
   creationId: string;
   accessToken: string;
@@ -203,7 +127,7 @@ async function waitUntilReady(params: {
   const {
     creationId,
     accessToken,
-    maxAttempts = 20,
+    maxAttempts = 30,
     delayMs = 3000,
   } = params;
 
@@ -220,16 +144,10 @@ async function waitUntilReady(params: {
 
       const status = data?.status_code || data?.status;
 
-      /**
-       * Success states
-       */
       if (["FINISHED", "READY", "PUBLISHED"].includes(status)) {
         return;
       }
 
-      /**
-       * Failure states
-       */
       if (["ERROR", "EXPIRED"].includes(status)) {
         fail("Instagram media processing failed", "IG_CONTAINER_PROCESSING_FAILED", 502, {
           creationId,
@@ -240,9 +158,6 @@ async function waitUntilReady(params: {
     } catch (e: any) {
       const err = getFbError(e);
 
-      /**
-       * Non-retryable error → fail immediately
-       */
       if (err.status && err.status < 500 && err.status !== 429 && err.status !== 408) {
         fail("Failed while checking Instagram container status", "IG_CONTAINER_STATUS_FAILED", err.status, {
           creationId,
@@ -257,18 +172,69 @@ async function waitUntilReady(params: {
     await sleep(delayMs);
   }
 
-  /**
-   * Timeout
-   */
   fail("Instagram media processing timed out", "IG_CONTAINER_PROCESSING_TIMEOUT", 504, {
     creationId,
     maxAttempts,
   });
 }
 
-/**
- * Publish Instagram images (single or carousel)
- */
+async function publishContainer(params: {
+  igUserId: string;
+  accessToken: string;
+  creationId: string;
+  retries?: number;
+}) {
+  const { igUserId, accessToken, creationId, retries = 2 } = params;
+
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      const { data } = await axios.post(
+        `${IG_API}/${igUserId}/media_publish`,
+        null,
+        {
+          params: {
+            creation_id: creationId,
+            access_token: accessToken,
+          },
+          timeout: 30000,
+          validateStatus: (s) => s >= 200 && s < 300,
+        }
+      );
+
+      if (!data?.id) {
+        fail("Instagram returned invalid publish response", "IG_PUBLISH_INVALID", 502, {
+          igUserId,
+          creationId,
+          response: data,
+        });
+      }
+
+      return data.id as string;
+    } catch (e: any) {
+      const err = getFbError(e);
+
+      if (attempt <= retries) {
+        await sleep(3000);
+        continue;
+      }
+
+      fail("Failed to publish Instagram media", "IG_PUBLISH_FAILED", err.status || 502, {
+        igUserId,
+        creationId,
+        attempt,
+        fbError: err.error,
+        errorMessage: err.message,
+        response: err.raw,
+      });
+    }
+  }
+
+  fail("Failed to publish Instagram media", "IG_PUBLISH_FAILED", 502, {
+    igUserId,
+    creationId,
+  });
+}
+
 export async function publishInstagramImages(opts: {
   igUserId: string;
   accessToken: string;
@@ -291,9 +257,6 @@ export async function publishInstagramImages(opts: {
   const safeImages = imageUrls.map(normalizeForIg);
 
   try {
-    /**
-     * Single image flow
-     */
     if (safeImages.length === 1) {
       const creationId = await createMediaContainer({
         igUserId,
@@ -302,18 +265,20 @@ export async function publishInstagramImages(opts: {
         caption,
       });
 
+      await waitUntilReady({
+        creationId,
+        accessToken,
+      });
+
       const mediaId = await publishContainer({
         igUserId,
         accessToken,
         creationId,
       });
 
-      return { mediaId };
+      return { mediaId, creationId };
     }
 
-    /**
-     * Carousel flow
-     */
     const children: string[] = [];
 
     for (const imageUrl of safeImages) {
@@ -322,6 +287,11 @@ export async function publishInstagramImages(opts: {
         accessToken,
         imageUrl,
         isCarouselItem: true,
+      });
+
+      await waitUntilReady({
+        creationId: childId,
+        accessToken,
       });
 
       children.push(childId);
@@ -335,13 +305,22 @@ export async function publishInstagramImages(opts: {
       children,
     });
 
+    await waitUntilReady({
+      creationId: parentId,
+      accessToken,
+    });
+
     const mediaId = await publishContainer({
       igUserId,
       accessToken,
       creationId: parentId,
     });
 
-    return { mediaId, children };
+    return {
+      mediaId,
+      creationId: parentId,
+      children,
+    };
   } catch (e: any) {
     if (e instanceof AppError) throw e;
 
@@ -353,9 +332,6 @@ export async function publishInstagramImages(opts: {
   }
 }
 
-/**
- * Publish Instagram video (Reels)
- */
 export async function publishInstagramVideo(opts: {
   igUserId: string;
   accessToken: string;
@@ -380,9 +356,6 @@ export async function publishInstagramVideo(opts: {
   }
 
   try {
-    /**
-     * Step 1: Create reel container
-     */
     const creationId = await createMediaContainer({
       igUserId,
       accessToken,
@@ -392,21 +365,18 @@ export async function publishInstagramVideo(opts: {
       shareToFeed,
     });
 
-    /**
-     * Step 2: Wait until processing is done
-     */
     await waitUntilReady({
       creationId,
       accessToken,
+      maxAttempts: 40,
+      delayMs: 5000,
     });
 
-    /**
-     * Step 3: Publish reel
-     */
     const mediaId = await publishContainer({
       igUserId,
       accessToken,
       creationId,
+      retries: 2,
     });
 
     return { mediaId, creationId };
